@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -122,7 +122,7 @@ public class SpanBytesDecoderTest {
 
   @Test public void niceErrorOnMalformed_inputSpans_PROTO3() {
     thrown.expect(IllegalArgumentException.class);
-    thrown.expectMessage("Truncated: length 101 > bytes remaining 3 reading List<Span> from proto3");
+    thrown.expectMessage("Malformed reading List<Span> from proto3");
 
     SpanBytesDecoder.PROTO3.decodeList(new byte[] {'h', 'e', 'l', 'l', 'o'});
   }

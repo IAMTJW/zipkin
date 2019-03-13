@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -158,7 +158,7 @@ public class Proto3CodecInteropTest {
     zipkin2.Annotation zipkinAnnotation = ZIPKIN_SPAN.annotations().get(0);
     Annotation protoAnnotation = PROTO_SPAN.getAnnotations(0);
 
-    Buffer buffer = new Buffer(ANNOTATION.sizeInBytes(zipkinAnnotation));
+    Buffer buffer = Buffer.allocate(ANNOTATION.sizeInBytes(zipkinAnnotation));
     ANNOTATION.write(buffer, zipkinAnnotation);
 
     assertThat(buffer.toByteArray())
@@ -170,7 +170,7 @@ public class Proto3CodecInteropTest {
     Annotation protoAnnotation = PROTO_SPAN.getAnnotations(0);
 
     Buffer buffer =
-      new Buffer(writeSpan(Span.newBuilder().addAnnotations(protoAnnotation).build()), 0);
+      Buffer.wrap(writeSpan(Span.newBuilder().addAnnotations(protoAnnotation).build()), 0);
     assertThat(buffer.readVarint32())
       .isEqualTo(ANNOTATION.key);
 
@@ -189,7 +189,7 @@ public class Proto3CodecInteropTest {
   }
 
   @Test public void localEndpoint_write_matchesProto3() throws IOException {
-    Buffer buffer = new Buffer(LOCAL_ENDPOINT.sizeInBytes(ZIPKIN_SPAN.localEndpoint()));
+    Buffer buffer = Buffer.allocate(LOCAL_ENDPOINT.sizeInBytes(ZIPKIN_SPAN.localEndpoint()));
     LOCAL_ENDPOINT.write(buffer, ZIPKIN_SPAN.localEndpoint());
 
     assertThat(buffer.toByteArray())
@@ -198,7 +198,7 @@ public class Proto3CodecInteropTest {
   }
 
   @Test public void remoteEndpoint_write_matchesProto3() throws IOException {
-    Buffer buffer = new Buffer(REMOTE_ENDPOINT.sizeInBytes(ZIPKIN_SPAN.remoteEndpoint()));
+    Buffer buffer = Buffer.allocate(REMOTE_ENDPOINT.sizeInBytes(ZIPKIN_SPAN.remoteEndpoint()));
     REMOTE_ENDPOINT.write(buffer, ZIPKIN_SPAN.remoteEndpoint());
 
     assertThat(buffer.toByteArray())
@@ -220,7 +220,7 @@ public class Proto3CodecInteropTest {
   @Test public void writeTagField_matchesProto3() throws IOException {
     MapEntry<String, String> entry = entry("clnt/finagle.version", "6.45.0");
     TagField field = new TagField(TAG_KEY);
-    Buffer buffer = new Buffer(field.sizeInBytes(entry));
+    Buffer buffer = Buffer.allocate(field.sizeInBytes(entry));
     field.write(buffer, entry);
 
     Span oneField = Span.newBuilder().putTags(entry.key, entry.value).build();

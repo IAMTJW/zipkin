@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -12,8 +12,6 @@
  * the License.
  */
 package zipkin2.internal;
-
-import java.util.Map;
 
 import static zipkin2.internal.JsonCodec.UTF_8;
 
@@ -85,7 +83,7 @@ final class Proto3Fields {
           return buffer.skip(4);
         default:
           throw new IllegalArgumentException(
-            "Malformed: invalid wireType " + wireType + " at byte " + buffer.pos);
+            "Malformed: invalid wireType " + wireType + " at byte " + buffer.pos());
       }
     }
   }
@@ -123,9 +121,7 @@ final class Proto3Fields {
     }
 
     final int readLengthPrefix(Buffer b) {
-      int length = b.readVarint32();
-      Proto3Fields.ensureLength(b, length);
-      return length;
+      return b.readVarint32();
     }
 
     abstract int sizeOfValue(T value);
@@ -150,10 +146,7 @@ final class Proto3Fields {
     }
 
     @Override byte[] readValue(Buffer b, int length) {
-      byte[] result = new byte[length];
-      System.arraycopy(b.toByteArray(), b.pos, result, 0, length);
-      b.pos += length;
-      return result;
+      return b.readByteArray(length);
     }
   }
 
@@ -213,9 +206,7 @@ final class Proto3Fields {
     }
 
     @Override String readValue(Buffer buffer, int length) {
-      String result = new String(buffer.toByteArray(), buffer.pos, length, UTF_8);
-      buffer.pos += length;
-      return result;
+      return new String(buffer.readByteArray(length), UTF_8);
     }
   }
 
@@ -237,7 +228,6 @@ final class Proto3Fields {
     }
 
     long readValue(Buffer buffer) {
-      ensureLength(buffer, 8);
       return buffer.readLongLe();
     }
   }
@@ -288,7 +278,7 @@ final class Proto3Fields {
     boolean read(Buffer b) {
       byte bool = b.readByte();
       if (bool < 0 || bool > 1) {
-        throw new IllegalArgumentException("Malformed: invalid boolean value at byte " + b.pos);
+        throw new IllegalArgumentException("Malformed: invalid boolean value at byte " + b.pos());
       }
       return bool == 1;
     }
@@ -309,12 +299,5 @@ final class Proto3Fields {
 
   static int sizeOfLengthDelimitedField(int sizeInBytes) {
     return 1 + Buffer.varintSizeInBytes(sizeInBytes) + sizeInBytes; // tag + len + bytes
-  }
-
-  static void ensureLength(Buffer buffer, int length) {
-    if (length > buffer.remaining()) {
-      throw new IllegalArgumentException(
-        "Truncated: length " + length + " > bytes remaining " + buffer.remaining());
-    }
   }
 }
