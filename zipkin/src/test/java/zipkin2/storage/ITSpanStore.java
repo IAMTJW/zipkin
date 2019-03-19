@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -27,6 +27,7 @@ import org.junit.Before;
 import org.junit.Test;
 import zipkin2.Endpoint;
 import zipkin2.Span;
+import zipkin2.internal.Trace;
 
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -225,6 +226,27 @@ public abstract class ITSpanStore {
     assertThat(store().getTraces(requestBuilder()
       .minDuration(CLIENT_SPAN.duration())
       .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
+  }
+
+  // pretend we had a late update of only timestamp/duration info
+  @Test public void getTraces_lateDuration() throws Exception {
+    Span missingDuration = CLIENT_SPAN.toBuilder().duration(0L).build();
+    Span lateDuration = Span.newBuilder()
+      .traceId(CLIENT_SPAN.traceId())
+      .id(CLIENT_SPAN.id())
+      .timestamp(CLIENT_SPAN.timestampAsLong())
+      .duration(CLIENT_SPAN.durationAsLong())
+      .build();
+    accept(missingDuration);
+    accept(lateDuration);
+
+    assertThat(store().getTraces(requestBuilder()
+      .minDuration(CLIENT_SPAN.durationAsLong() + 1)
+      .build()).execute()).isEmpty();
+
+    assertThat(store().getTraces(requestBuilder()
+      .minDuration(CLIENT_SPAN.duration())
+      .build()).execute()).flatExtracting(Trace::merge).containsExactly(CLIENT_SPAN);
   }
 
   @Test public void getTraces_maxDuration() throws Exception {
