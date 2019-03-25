@@ -7,7 +7,7 @@ The implementation uses JOOQ to generate PostgreSQL SQL commands. It is only tes
 
 See the [schema DDL](src/main/resources/postgresql.sql).
 
-`zipkin.storage.postgresql.PostgreSQLStorage.Builder` includes defaults that will
+`PostgreSQLStorage.Builder` includes defaults that will
 operate against a given Datasource.
 
 ## Testing this component

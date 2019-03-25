@@ -28,8 +28,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import zipkin.storage.StorageComponent;
-import zipkin.storage.postgresql.PostgreSQLStorage;
+import zipkin2.storage.postgresql.PostgreSQLStorage;
+import zipkin2.storage.StorageComponent;
 
 @Configuration
 @EnableConfigurationProperties(ZipkinPostgreSQLStorageProperties.class)
@@ -56,7 +56,7 @@ class ZipkinPostgreSQLStorageAutoConfiguration {
 
   @Bean StorageComponent storage(Executor executor, DataSource dataSource,
       @Value("${zipkin.storage.strict-trace-id:true}") boolean strictTraceId) {
-    return PostgreSQLStorage.builder()
+    return PostgreSQLStorage.newBuilder()
         .strictTraceId(strictTraceId)
         .executor(executor)
         .datasource(dataSource)

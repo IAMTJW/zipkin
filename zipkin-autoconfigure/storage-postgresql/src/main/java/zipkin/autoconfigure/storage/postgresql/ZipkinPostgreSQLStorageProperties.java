@@ -93,7 +93,6 @@ public class ZipkinPostgreSQLStorageProperties implements Serializable { // for 
     StringBuilder url = new StringBuilder("jdbc:postgresql://");
     url.append(getHost()).append(":").append(getPort());
     url.append("/").append(getDb());
-    //url.append("&useUnicode=yes&characterEncoding=UTF-8");
     HikariDataSource result = new HikariDataSource();
     result.setDriverClassName("org.postgresql.Driver");
     result.setJdbcUrl(url.toString());
