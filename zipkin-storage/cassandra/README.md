@@ -1,10 +1,11 @@
-# storage-cassandra
+# zipkin-storage-cassandra
 
-This CQL-based Cassandra 3.9+ storage component, built upon the [Zipkin v2 api and model](http://zipkin.io/zipkin-api/#/default/post_spans).
+This is a CQL-based Cassandra storage component, built upon the [Zipkin v2 api and model](https://zipkin.io/zipkin-api/#/default/post_spans).
+This uses Cassandra 3.11.3+ features, but is tested against the latest patch of Cassandra 3.11.
 
 `CassandraSpanStore.getDependencies()` returns pre-aggregated dependency links (ex via [zipkin-dependencies](https://github.com/openzipkin/zipkin-dependencies)).
 
-The implementation uses the [Datastax Java Driver 3.1.x](https://github.com/datastax/java-driver).
+The implementation uses the [Datastax Java Driver 4.x](https://github.com/datastax/java-driver).
 
 `zipkin2.storage.cassandra.CassandraStorage.Builder` includes defaults that will operate against a local Cassandra installation.
 
@@ -15,14 +16,12 @@ zipkin-server).
 
 Zipkin's storage layer logs to the category "zipkin2.storage.cassandra",
 but you may wish to see the entire "zipkin2" when troubleshooting.
-Depending on details desired, the underlying driver's category
-"com.datastax.driver.core" at debug level may help.
 
-If you just want to see queries and latency, set the category
-"com.datastax.driver.core.QueryLogger" to debug or trace. Trace level
-includes bound values.
+If you want to see requests and latency, set the logging category
+"com.datastax.oss.driver.internal.core.tracker.RequestLogger" to DEBUG.
+TRACE includes query values.
 
-See [Logging Query Latencies](http://docs.datastax.com/en/developer/java-driver/3.0/supplemental/manual/logging/#logging-query-latencies) for more details.
+See [Request Logger](https://docs.datastax.com/en/developer/java-driver/4.9/manual/core/request_tracker/#request-logger) for more details.
 
 ## Testing
 This module conditionally runs integration tests against a local Cassandra instance.
@@ -46,7 +45,7 @@ That said, all integration tests run on pull request via Travis.
 To run a single integration test, use the following syntax:
 
 ```bash
-$ ./mvnw -Dit.test='ITCassandraStorage$SpanStoreTest#getTraces_duration' -pl zipkin-storage/zipkin2_cassandra clean verify
+$ ./mvnw -Dit.test='ITCassandraStorage$ITSpanStore#getTraces_duration' -pl zipkin-storage/cassandra clean verify
 ```
 
 ## Strict trace ID
@@ -83,8 +82,10 @@ of tables from 7 down to 4 (from the original cassandra schema). SASI
 also moves some write-amplification from CassandraSpanConsumer into C*.
 
 CassandraSpanConsumer directly writes to the tables `span`,
-`trace_by_service_span` and `span_by_service`. The latter two
-amplify writes by a factor of the distinct service names in a span.
+`trace_by_service_remote_service` `trace_by_service_span` and
+`span_by_service`. The latter service based indexes amplify writes by a
+factor of the distinct service names (`Span.localServiceName`).
+
 Other amplification happens internally to C*, visible in the increase
 write latency (although write latency remains performant at single digit
 milliseconds).
@@ -104,21 +105,46 @@ in a single trace ID query against the above two indexes.
 Note: annotations with values longer than 256 characters are not written to the
 `annotation_query` SASI, as they aren't intended for use in user queries.
 
+#### `trace_by_service_X` indexing
+
+`trace_by_service_X` rows are answers to a shard of trace query. A query
+request is broken down into possibly multiple shards based on our index
+implementation.
+
+Ex. `GET /api/v2/traces?serviceName=tweetiebird%remoteService=s3`
+
+Breaks down into two query shards (this example omits time range and limit)
+* `(service=tweetiebird, span=)`
+* `(service=tweetiebird, remote_service=s3)`
+
+The results intersect prioritizing on timestamp to return the distinct
+trace IDs needed for a follow-up fetch.
+
+#### `trace_by_service_remote_service` indexing
+
+For example, a span in trace ID 1 named "get" created by "tweetiebird",
+accessing the remote service "s3" results in the following row:
+
+* `service=service1, span=remote_service, ts=timestamp_millis, trace_id=1`
+
+This index is only used when the `remoteServiceName` query is used. Ex.
+1. `GET /api/v2/traces?serviceName=tweetiebird&remoteServiceName=s3`
+1. `GET /api/v2/traces?serviceName=tweetiebird&maxDuration=199500&remoteServiceName=s3`
+
 #### `trace_by_service_span` indexing
 
-`trace_by_service_span` rows represent a shard of a user query. For example, a
-span in trace ID 1 named "get" created by "service1", taking 20 milliseconds
-results in the following rows:
+For example, a span in trace ID 1 named "get" created by "service1",
+taking 20 milliseconds results in the following rows:
 
-1. `service=service1, span=targz, trace_id=1, duration=200`
-2. `service=service1, span=, trace_id=1, duration=200`
+1. `service=service1, span=get, trace_id=1, ts=timestamp_millis, duration=200`
+2. `service=service1, span=, trace_id=1, ts=timestamp_millis, duration=200`
 
 Here are corresponding queries that relate to the above rows:
-1. `GET /api/v2/traces?serviceName=service1&spanName=targz`
-1. `GET /api/v2/traces?serviceName=service1&spanName=targz&minDuration=200000`
+1. `GET /api/v2/traces?serviceName=service1&spanName=get`
+1. `GET /api/v2/traces?serviceName=service1&spanName=get&minDuration=200000`
 1. `GET /api/v2/traces?serviceName=service1&minDuration=200000`
-2. `GET /api/v2/traces?spanName=targz`
-2. `GET /api/v2/traces?duration=199500`
+1. `GET /api/v2/traces?spanName=get`
+1. `GET /api/v2/traces?maxDuration=199500`
 
 As you'll notice, the duration component is optional, and stored in
 millisecond resolution as opposed to microsecond (which the query represents).
@@ -129,10 +155,6 @@ search granularity is millisecond, original duration data remains microsecond
 granularity. Meanwhile, write performance is dramatically better than writing
 discrete values, due to fewer distinct writes.
 
-You might wonder how the last two queries work, considering they don't know
-the service name associated with index rows. When needed, this implementation
-performs a service name fetch, resulting in a fan-out composition over row 2.
-
 #### Disabling indexing
 Indexing is a good default, but some sites who don't use Zipkin UI's
 "Find a Trace" screen may want to disable indexing. This means [indexing schema](src/main/resources/zipkin2-schema-indexes.cql)
@@ -142,7 +164,7 @@ and reduces size on disk by not amplifying writes with index data.
 [Disabling search](../../README.md#disabling-search) disables indexing.
 
 ### Time-To_live
-Time-To-Live is default now at the table level. It can not be overridden in write requests.
+Time-To-Live is default now at the table level. It cannot be overridden in write requests.
 
 There's a different default TTL for trace data and indexes, 7 days vs 3 days respectively. The impact is that you can
 retrieve a trace by ID for up to 7 days, but you can only search the last 3 days of traces (ex by service name).

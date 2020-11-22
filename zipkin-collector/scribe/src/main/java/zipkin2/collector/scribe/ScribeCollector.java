@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,10 +13,6 @@
  */
 package zipkin2.collector.scribe;
 
-import com.facebook.swift.codec.ThriftCodecManager;
-import com.facebook.swift.service.ThriftServer;
-import com.facebook.swift.service.ThriftServerConfig;
-import com.facebook.swift.service.ThriftServiceProcessor;
 import zipkin2.CheckResult;
 import zipkin2.collector.Collector;
 import zipkin2.collector.CollectorComponent;
@@ -24,9 +20,6 @@ import zipkin2.collector.CollectorMetrics;
 import zipkin2.collector.CollectorSampler;
 import zipkin2.storage.SpanConsumer;
 import zipkin2.storage.StorageComponent;
-
-import static com.google.common.base.Preconditions.checkState;
-import static java.util.Collections.emptyList;
 
 /**
  * This collector accepts Scribe logs in a specified category. Each log entry is expected to contain
@@ -46,22 +39,19 @@ public final class ScribeCollector extends CollectorComponent {
     String category = "zipkin";
     int port = 9410;
 
-    @Override
-    public Builder storage(StorageComponent storage) {
+    @Override public Builder storage(StorageComponent storage) {
       delegate.storage(storage);
       return this;
     }
 
-    @Override
-    public Builder metrics(CollectorMetrics metrics) {
+    @Override public Builder metrics(CollectorMetrics metrics) {
       if (metrics == null) throw new NullPointerException("metrics == null");
       this.metrics = metrics.forTransport("scribe");
       delegate.metrics(this.metrics);
       return this;
     }
 
-    @Override
-    public Builder sampler(CollectorSampler sampler) {
+    @Override public Builder sampler(CollectorSampler sampler) {
       delegate.sampler(sampler);
       return this;
     }
@@ -79,40 +69,36 @@ public final class ScribeCollector extends CollectorComponent {
       return this;
     }
 
-    @Override
-    public ScribeCollector build() {
+    @Override public ScribeCollector build() {
       return new ScribeCollector(this);
     }
   }
 
-  final ThriftServer server;
+  final NettyScribeServer server;
 
   ScribeCollector(Builder builder) {
-    ScribeSpanConsumer scribe = new ScribeSpanConsumer(builder);
-    ThriftServiceProcessor processor =
-        new ThriftServiceProcessor(new ThriftCodecManager(), emptyList(), scribe);
-    server = new ThriftServer(processor, new ThriftServerConfig().setPort(builder.port));
+    server = new NettyScribeServer(builder.port, new ScribeSpanConsumer(
+      builder.delegate.build(), builder.metrics, builder.category));
   }
 
   /** Will throw an exception if the {@link Builder#port(int) port} is already in use. */
-  @Override
-  public ScribeCollector start() {
+  @Override public ScribeCollector start() {
     server.start();
     return this;
   }
 
-  @Override
-  public CheckResult check() {
-    try {
-      checkState(server.isRunning(), "server not running");
-    } catch (RuntimeException e) {
-      return CheckResult.failed(e);
+  @Override public CheckResult check() {
+    if (!server.isRunning()) {
+      return CheckResult.failed(new IllegalStateException("server not running"));
     }
     return CheckResult.OK;
   }
 
-  @Override
-  public void close() {
+  @Override public final String toString() {
+    return "ScribeCollector{port=" + server.port + ", category=" + server.scribe.category + "}";
+  }
+
+  @Override public void close() {
     server.close();
   }
 }

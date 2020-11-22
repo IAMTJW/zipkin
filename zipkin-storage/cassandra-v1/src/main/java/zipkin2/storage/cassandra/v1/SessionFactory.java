@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,23 +13,10 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.HostDistance;
-import com.datastax.driver.core.PoolingOptions;
-import com.datastax.driver.core.QueryLogger;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
-import com.datastax.driver.core.policies.LatencyAwarePolicy;
-import com.datastax.driver.core.policies.RoundRobinPolicy;
-import com.datastax.driver.core.policies.TokenAwarePolicy;
-import com.google.common.collect.Sets;
-import com.google.common.io.Closer;
-import com.google.common.net.HostAndPort;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
+import com.datastax.oss.driver.api.core.CqlSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import zipkin2.storage.cassandra.internal.SessionBuilder;
 
 /**
  * Creates a session and ensures schema if configured. Closes the cluster and session if any
@@ -37,82 +24,44 @@ import java.util.Set;
  */
 public interface SessionFactory {
 
-  Session create(CassandraStorage storage);
+  CqlSession create(CassandraStorage storage);
 
   final class Default implements SessionFactory {
+    static final Logger LOG = LoggerFactory.getLogger(Schema.class);
 
     /**
      * Creates a session and ensures schema if configured. Closes the cluster and session if any
      * exception occurred.
      */
-    @Override
-    public Session create(CassandraStorage cassandra) {
-      Closer closer = Closer.create();
+    @Override public CqlSession create(CassandraStorage cassandra) {
+      CqlSession session = null;
       try {
-        Cluster cluster = closer.register(buildCluster(cassandra));
-        cluster.register(new QueryLogger.Builder().build());
+        session = buildSession(cassandra);
+
+        String keyspace = cassandra.keyspace;
         if (cassandra.ensureSchema) {
-          Session session = closer.register(cluster.connect());
           Schema.ensureExists(cassandra.keyspace, session);
-          session.execute("USE " + cassandra.keyspace);
-          return session;
         } else {
-          return cluster.connect(cassandra.keyspace);
+          LOG.debug("Skipping schema check on keyspace {} as ensureSchema was false", keyspace);
         }
-      } catch (RuntimeException e) {
-        try {
-          closer.close();
-        } catch (IOException ignored) {
-        }
+
+        session.execute("USE " + keyspace);
+
+        return session;
+      } catch (RuntimeException e) { // don't leak on unexpected exception!
+        if (session != null) session.close();
         throw e;
       }
     }
 
-    // Visible for testing
-    static Cluster buildCluster(CassandraStorage cassandra) {
-      Cluster.Builder builder = Cluster.builder().withoutJMXReporting();
-      List<InetSocketAddress> contactPoints = parseContactPoints(cassandra);
-      int defaultPort = findConnectPort(contactPoints);
-      builder.addContactPointsWithPorts(contactPoints);
-      builder.withPort(defaultPort); // This ends up protocolOptions.port
-      if (cassandra.username != null && cassandra.password != null) {
-        builder.withCredentials(cassandra.username, cassandra.password);
-      }
-      builder.withRetryPolicy(ZipkinRetryPolicy.INSTANCE);
-      builder.withLoadBalancingPolicy(
-          new TokenAwarePolicy(
-              new LatencyAwarePolicy.Builder(
-                      cassandra.localDc != null
-                          ? DCAwareRoundRobinPolicy.builder().withLocalDc(cassandra.localDc).build()
-                          : new RoundRobinPolicy()
-                      // This can select remote, but LatencyAwarePolicy will prefer local
-                      )
-                  .build()));
-      builder.withPoolingOptions(
-          new PoolingOptions()
-              .setMaxConnectionsPerHost(HostDistance.LOCAL, cassandra.maxConnections));
-      if (cassandra.useSsl) {
-        builder = builder.withSSL();
-      }
-      return builder.build();
-    }
-
-    static List<InetSocketAddress> parseContactPoints(CassandraStorage cassandra) {
-      List<InetSocketAddress> result = new ArrayList<>();
-      for (String contactPoint : cassandra.contactPoints.split(",")) {
-        HostAndPort parsed = HostAndPort.fromString(contactPoint);
-        result.add(new InetSocketAddress(parsed.getHostText(), parsed.getPortOrDefault(9042)));
-      }
-      return result;
-    }
-
-    /** Returns the consistent port across all contact points or 9042 */
-    static int findConnectPort(List<InetSocketAddress> contactPoints) {
-      Set<Integer> ports = Sets.newLinkedHashSet();
-      for (InetSocketAddress contactPoint : contactPoints) {
-        ports.add(contactPoint.getPort());
-      }
-      return ports.size() == 1 ? ports.iterator().next() : 9042;
+    static CqlSession buildSession(CassandraStorage cassandra) {
+      return SessionBuilder.buildSession(
+        cassandra.contactPoints,
+        cassandra.localDc,
+        cassandra.poolingOptions,
+        cassandra.authProvider,
+        cassandra.useSsl
+      );
     }
   }
 }

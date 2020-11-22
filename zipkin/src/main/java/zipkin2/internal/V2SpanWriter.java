@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -19,14 +19,13 @@ import zipkin2.Annotation;
 import zipkin2.Endpoint;
 import zipkin2.Span;
 
-import static zipkin2.internal.Buffer.asciiSizeInBytes;
 import static zipkin2.internal.JsonEscaper.jsonEscape;
 import static zipkin2.internal.JsonEscaper.jsonEscapedSizeInBytes;
+import static zipkin2.internal.WriteBuffer.asciiSizeInBytes;
 
 // @Immutable
-public final class V2SpanWriter implements Buffer.Writer<Span> {
-  @Override
-  public int sizeInBytes(Span value) {
+public final class V2SpanWriter implements WriteBuffer.Writer<Span> {
+  @Override public int sizeInBytes(Span value) {
     int sizeInBytes = 13; // {"traceId":""
     sizeInBytes += value.traceId().length();
     if (value.parentId() != null) {
@@ -85,24 +84,35 @@ public final class V2SpanWriter implements Buffer.Writer<Span> {
     return ++sizeInBytes; // }
   }
 
-  @Override
-  public void write(Span value, Buffer b) {
-    b.writeAscii("{\"traceId\":\"").writeAscii(value.traceId()).writeByte('"');
+  @Override public void write(Span value, WriteBuffer b) {
+    b.writeAscii("{\"traceId\":\"");
+    b.writeAscii(value.traceId());
+    b.writeByte('"');
     if (value.parentId() != null) {
-      b.writeAscii(",\"parentId\":\"").writeAscii(value.parentId()).writeByte('"');
+      b.writeAscii(",\"parentId\":\"");
+      b.writeAscii(value.parentId());
+      b.writeByte('"');
     }
-    b.writeAscii(",\"id\":\"").writeAscii(value.id()).writeByte('"');
+    b.writeAscii(",\"id\":\"");
+    b.writeAscii(value.id());
+    b.writeByte('"');
     if (value.kind() != null) {
-      b.writeAscii(",\"kind\":\"").writeAscii(value.kind().toString()).writeByte('"');
+      b.writeAscii(",\"kind\":\"");
+      b.writeAscii(value.kind().toString());
+      b.writeByte('"');
     }
     if (value.name() != null) {
-      b.writeAscii(",\"name\":\"").writeUtf8(jsonEscape(value.name())).writeByte('"');
+      b.writeAscii(",\"name\":\"");
+      b.writeUtf8(jsonEscape(value.name()));
+      b.writeByte('"');
     }
     if (value.timestampAsLong() != 0L) {
-      b.writeAscii(",\"timestamp\":").writeAscii(value.timestampAsLong());
+      b.writeAscii(",\"timestamp\":");
+      b.writeAscii(value.timestampAsLong());
     }
     if (value.durationAsLong() != 0L) {
-      b.writeAscii(",\"duration\":").writeAscii(value.durationAsLong());
+      b.writeAscii(",\"duration\":");
+      b.writeAscii(value.durationAsLong());
     }
     if (value.localEndpoint() != null) {
       b.writeAscii(",\"localEndpoint\":");
@@ -127,8 +137,11 @@ public final class V2SpanWriter implements Buffer.Writer<Span> {
       Iterator<Map.Entry<String, String>> i = value.tags().entrySet().iterator();
       while (i.hasNext()) {
         Map.Entry<String, String> entry = i.next();
-        b.writeByte('"').writeUtf8(jsonEscape(entry.getKey())).writeAscii("\":\"");
-        b.writeUtf8(jsonEscape(entry.getValue())).writeByte('"');
+        b.writeByte('"');
+        b.writeUtf8(jsonEscape(entry.getKey()));
+        b.writeAscii("\":\"");
+        b.writeUtf8(jsonEscape(entry.getValue()));
+        b.writeByte('"');
         if (i.hasNext()) b.writeByte(',');
       }
       b.writeByte('}');
@@ -142,8 +155,7 @@ public final class V2SpanWriter implements Buffer.Writer<Span> {
     b.writeByte('}');
   }
 
-  @Override
-  public String toString() {
+  @Override public String toString() {
     return "Span";
   }
 
@@ -174,32 +186,36 @@ public final class V2SpanWriter implements Buffer.Writer<Span> {
     return ++sizeInBytes; // }
   }
 
-  static void writeEndpoint(Endpoint value, Buffer b, boolean writeEmptyServiceName) {
+  static void writeEndpoint(Endpoint value, WriteBuffer b, boolean writeEmptyServiceName) {
     b.writeByte('{');
     boolean wroteField = false;
     String serviceName = value.serviceName();
     if (serviceName == null && writeEmptyServiceName) serviceName = "";
     if (serviceName != null) {
       b.writeAscii("\"serviceName\":\"");
-      b.writeUtf8(jsonEscape(serviceName)).writeByte('"');
+      b.writeUtf8(jsonEscape(serviceName));
+      b.writeByte('"');
       wroteField = true;
     }
     if (value.ipv4() != null) {
       if (wroteField) b.writeByte(',');
       b.writeAscii("\"ipv4\":\"");
-      b.writeAscii(value.ipv4()).writeByte('"');
+      b.writeAscii(value.ipv4());
+      b.writeByte('"');
       wroteField = true;
     }
     if (value.ipv6() != null) {
       if (wroteField) b.writeByte(',');
       b.writeAscii("\"ipv6\":\"");
-      b.writeAscii(value.ipv6()).writeByte('"');
+      b.writeAscii(value.ipv6());
+      b.writeByte('"');
       wroteField = true;
     }
     int port = value.portAsInt();
     if (port != 0) {
       if (wroteField) b.writeByte(',');
-      b.writeAscii("\"port\":").writeAscii(port);
+      b.writeAscii("\"port\":");
+      b.writeAscii(port);
     }
     b.writeByte('}');
   }
@@ -215,10 +231,17 @@ public final class V2SpanWriter implements Buffer.Writer<Span> {
     return sizeInBytes;
   }
 
-  static void writeAnnotation(long timestamp, String value, @Nullable byte[] endpoint, Buffer b) {
-    b.writeAscii("{\"timestamp\":").writeAscii(timestamp);
-    b.writeAscii(",\"value\":\"").writeUtf8(jsonEscape(value)).writeByte('"');
-    if (endpoint != null) b.writeAscii(",\"endpoint\":").write(endpoint);
+  static void writeAnnotation(long timestamp, String value, @Nullable byte[] endpoint,
+    WriteBuffer b) {
+    b.writeAscii("{\"timestamp\":");
+    b.writeAscii(timestamp);
+    b.writeAscii(",\"value\":\"");
+    b.writeUtf8(jsonEscape(value));
+    b.writeByte('"');
+    if (endpoint != null) {
+      b.writeAscii(",\"endpoint\":");
+      b.write(endpoint);
+    }
     b.writeByte('}');
   }
 }

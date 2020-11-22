@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -27,6 +27,7 @@ import okio.GzipSink;
 import org.junit.AssumptionViolatedException;
 import org.junit.Rule;
 import org.junit.Test;
+import org.slf4j.bridge.SLF4JBridgeHandler;
 import zipkin2.Span;
 import zipkin2.codec.SpanBytesEncoder;
 
@@ -37,6 +38,12 @@ import static zipkin2.TestObjects.CLIENT_SPAN;
 import static zipkin2.TestObjects.LOTS_OF_SPANS;
 
 public class ZipkinRuleTest {
+
+  static {
+    // ensure jul-to-slf4j works
+    SLF4JBridgeHandler.removeHandlersForRootLogger();
+    SLF4JBridgeHandler.install();
+  }
 
   @Rule public ZipkinRule zipkin = new ZipkinRule();
 
@@ -97,13 +104,15 @@ public class ZipkinRuleTest {
   /** The raw query can show affects like redundant rows in the data store. */
   @Test
   public void storeSpans_readbackRaw() {
-    String traceId = LOTS_OF_SPANS[0].traceId();
+    Span missingDuration = LOTS_OF_SPANS[0].toBuilder().duration(null).build();
+    Span withDuration = LOTS_OF_SPANS[0];
 
     // write the span to zipkin directly
-    zipkin.storeSpans(asList(LOTS_OF_SPANS[0]));
-    zipkin.storeSpans(asList(LOTS_OF_SPANS[0]));
+    zipkin.storeSpans(asList(missingDuration));
+    zipkin.storeSpans(asList(withDuration));
 
-    assertThat(zipkin.getTrace(traceId)).containsExactly(LOTS_OF_SPANS[0], LOTS_OF_SPANS[0]);
+    assertThat(zipkin.getTrace(missingDuration.traceId()))
+      .containsExactly(missingDuration, withDuration);
   }
 
   @Test
@@ -173,14 +182,11 @@ public class ZipkinRuleTest {
     gzipSink.close();
     ByteString gzippedJson = sink.readByteString();
 
-    client
-        .newCall(
-            new Request.Builder()
-                .url(zipkin.httpUrl() + "/api/v1/spans")
-                .addHeader("Content-Encoding", "gzip")
-                .post(RequestBody.create(MediaType.parse("application/json"), gzippedJson))
-                .build())
-        .execute();
+    client.newCall(new Request.Builder()
+      .url(zipkin.httpUrl() + "/api/v1/spans")
+      .addHeader("Content-Encoding", "gzip")
+      .post(RequestBody.create(MediaType.parse("application/json"), gzippedJson))
+      .build()).execute();
 
     assertThat(zipkin.collectorMetrics().bytes()).isEqualTo(spansInJson.length);
   }

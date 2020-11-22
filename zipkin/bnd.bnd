@@ -1,3 +1,4 @@
+# we block import of shaded packages as maven bundle plugin analyzes the unshaded jar
 Import-Package: \
 	!com.google.gson.stream,\
 	*

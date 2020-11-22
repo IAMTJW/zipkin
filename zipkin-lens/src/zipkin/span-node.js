@@ -1,3 +1,16 @@
+/*
+ * Copyright 2015-2020 The OpenZipkin Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
 import { compare, mergeV2ById } from './span-cleaner';
 
 /*
@@ -41,7 +54,8 @@ export class SpanNode {
   // Adds the child IFF it isn't already a child.
   addChild(child) {
     if (!child) throw new Error('child was undefined');
-    if (child === this) throw new Error(`circular dependency on ${this.toString()}`);
+    if (child === this)
+      throw new Error(`circular dependency on ${this.toString()}`);
     child._setParent(this);
     this._children.push(child);
   }
@@ -50,8 +64,9 @@ export class SpanNode {
   queueRootMostSpans() {
     const queue = [];
     // since the input data could be headless, we first push onto the queue the root-most spans
-    if (typeof this.span === 'undefined') { // synthetic root
-      this.children.forEach(child => queue.push(child));
+    if (typeof this.span === 'undefined') {
+      // synthetic root
+      this.children.forEach((child) => queue.push(child));
     } else {
       queue.push(this);
     }
@@ -185,7 +200,8 @@ export class SpanNodeBuilder {
         // If there's no shared parent, fall back to normal case which is unqualified beyond ID.
         parent = span.parentId;
       }
-    } else if (this._rootSpan) { // we are root or don't know our parent
+    } else if (this._rootSpan) {
+      // we are root or don't know our parent
       if (this._debug) {
         const prefix = 'attributing span missing parent to root';
         /* eslint-disable no-console */
@@ -245,7 +261,9 @@ export class SpanNodeBuilder {
     if (!this._rootSpan) {
       if (this._debug) {
         /* eslint-disable no-console */
-        console.log(`substituting dummy node for missing root span: traceId=${traceId}`);
+        console.log(
+          `substituting dummy node for missing root span: traceId=${traceId}`,
+        );
       }
       this._rootSpan = new SpanNode();
     }
@@ -256,7 +274,8 @@ export class SpanNodeBuilder {
       const child = this._keyToNode[key];
       const parent = this._keyToNode[this._spanToParent[key]];
 
-      if (!parent) { // Handle headless by attaching spans missing parents to root
+      if (!parent) {
+        // Handle headless by attaching spans missing parents to root
         this._rootSpan.addChild(child);
       } else {
         parent.addChild(child);

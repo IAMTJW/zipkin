@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,130 +13,73 @@
  */
 package zipkin2.storage.cassandra;
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ConsistencyLevel;
-import com.datastax.driver.core.QueryLogger;
-import com.datastax.driver.core.QueryOptions;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
-import com.datastax.driver.core.policies.LatencyAwarePolicy;
-import com.datastax.driver.core.policies.RoundRobinPolicy;
-import com.datastax.driver.core.policies.TokenAwarePolicy;
-import com.datastax.driver.mapping.MappingManager;
-import com.google.common.collect.Sets;
-import com.google.common.io.Closer;
-import com.google.common.net.HostAndPort;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.data.UdtValue;
+import com.datastax.oss.driver.api.core.metadata.schema.KeyspaceMetadata;
+import com.datastax.oss.driver.api.core.type.codec.TypeCodec;
+import com.datastax.oss.driver.api.core.type.codec.registry.MutableCodecRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import zipkin2.storage.cassandra.Schema.AnnotationUDT;
-import zipkin2.storage.cassandra.Schema.EndpointUDT;
+import zipkin2.storage.cassandra.internal.SessionBuilder;
+
+import static zipkin2.Call.propagateIfFatal;
 
 /**
  * Creates a session and ensures schema if configured. Closes the cluster and session if any
  * exception occurred.
  */
 final class DefaultSessionFactory implements CassandraStorage.SessionFactory {
-  private static final Logger LOG = LoggerFactory.getLogger(Schema.class);
+  static final Logger LOG = LoggerFactory.getLogger(Schema.class);
 
   /**
    * Creates a session and ensures schema if configured. Closes the cluster and session if any
    * exception occurred.
    */
-  @Override
-  public Session create(CassandraStorage cassandra) {
-    Closer closer = Closer.create();
+  @Override public CqlSession create(CassandraStorage cassandra) {
+    CqlSession session = null;
     try {
-      Cluster cluster = closer.register(buildCluster(cassandra));
-      cluster.register(new QueryLogger.Builder().build());
-      Session session;
-      String keyspace = cassandra.keyspace();
-      if (cassandra.ensureSchema()) {
-        session = closer.register(cluster.connect());
-        Schema.ensureExists(keyspace, cassandra.searchEnabled(), session);
-        session.execute("USE " + keyspace);
+      session = buildSession(cassandra);
+
+      String keyspace = cassandra.keyspace;
+      if (cassandra.ensureSchema) {
+        Schema.ensureExists(keyspace, cassandra.searchEnabled, session);
       } else {
         LOG.debug("Skipping schema check on keyspace {} as ensureSchema was false", keyspace);
-        session = cluster.connect(keyspace);
       }
 
-      initializeUDTs(session);
+      session.execute("USE " + keyspace);
+      initializeUDTs(session, keyspace);
 
       return session;
-    } catch (RuntimeException e) {
-      try {
-        closer.close();
-      } catch (IOException ignored) {
-      }
+    } catch (RuntimeException | Error e) { // don't leak on unexpected exception!
+      propagateIfFatal(e);
+      if (session != null) session.close();
       throw e;
     }
   }
 
-  private static void initializeUDTs(Session session) {
-    MappingManager mapping = new MappingManager(session);
-    String keyspace = session.getLoggedKeyspace();
+  static CqlSession buildSession(CassandraStorage cassandra) {
+    return SessionBuilder.buildSession(
+      cassandra.contactPoints,
+      cassandra.localDc,
+      cassandra.poolingOptions,
+      cassandra.authProvider,
+      cassandra.useSsl
+    );
+  }
+
+  static void initializeUDTs(CqlSession session, String keyspace) {
+    KeyspaceMetadata ks = session.getMetadata().getKeyspace(keyspace).get();
+    MutableCodecRegistry codecRegistry =
+      (MutableCodecRegistry) session.getContext().getCodecRegistry();
+
+    TypeCodec<UdtValue> annotationUDTCodec =
+      codecRegistry.codecFor(ks.getUserDefinedType("annotation").get());
+    codecRegistry.register(new AnnotationCodec(annotationUDTCodec));
+
     LOG.debug("Registering endpoint and annotation UDTs to keyspace {}", keyspace);
-    mapping.udtCodec(EndpointUDT.class, keyspace);
-    mapping.udtCodec(AnnotationUDT.class, keyspace);
-  }
-
-  // Visible for testing
-  static Cluster buildCluster(CassandraStorage cassandra) {
-    Cluster.Builder builder = Cluster.builder().withoutJMXReporting();
-    List<InetSocketAddress> contactPoints = parseContactPoints(cassandra);
-    int defaultPort = findConnectPort(contactPoints);
-    builder.addContactPointsWithPorts(contactPoints);
-    builder.withPort(defaultPort); // This ends up protocolOptions.port
-    if (cassandra.username() != null && cassandra.password() != null) {
-      builder.withCredentials(cassandra.username(), cassandra.password());
-    }
-    builder.withRetryPolicy(ZipkinRetryPolicy.INSTANCE);
-    builder.withLoadBalancingPolicy(
-        new TokenAwarePolicy(
-            new LatencyAwarePolicy.Builder(
-                    cassandra.localDc() != null
-                        ? DCAwareRoundRobinPolicy.builder().withLocalDc(cassandra.localDc()).build()
-                        : new RoundRobinPolicy()
-                    // This can select remote, but LatencyAwarePolicy will prefer local
-                    )
-                .build()));
-    builder.withPoolingOptions(cassandra.poolingOptions());
-
-    builder.withQueryOptions(
-        new QueryOptions()
-            // if local_dc isn't defined LOCAL_ONE incorrectly sticks to first seed host that
-            // connects
-            .setConsistencyLevel(
-                null != cassandra.localDc() ? ConsistencyLevel.LOCAL_ONE : ConsistencyLevel.ONE)
-            // all zipkin cql writes are idempotent
-            .setDefaultIdempotence(true));
-
-    if (cassandra.useSsl()) {
-      builder = builder.withSSL();
-    }
-
-    return builder.build();
-  }
-
-  static List<InetSocketAddress> parseContactPoints(CassandraStorage cassandra) {
-    List<InetSocketAddress> result = new ArrayList<>();
-    for (String contactPoint : cassandra.contactPoints().split(",")) {
-      HostAndPort parsed = HostAndPort.fromString(contactPoint);
-      result.add(new InetSocketAddress(parsed.getHostText(), parsed.getPortOrDefault(9042)));
-    }
-    return result;
-  }
-
-  /** Returns the consistent port across all contact points or 9042 */
-  static int findConnectPort(List<InetSocketAddress> contactPoints) {
-    Set<Integer> ports = Sets.newLinkedHashSet();
-    for (InetSocketAddress contactPoint : contactPoints) {
-      ports.add(contactPoint.getPort());
-    }
-    return ports.size() == 1 ? ports.iterator().next() : 9042;
+    TypeCodec<UdtValue> endpointUDTCodec =
+      codecRegistry.codecFor(ks.getUserDefinedType("endpoint").get());
+    codecRegistry.register(new EndpointCodec(endpointUDTCodec));
   }
 }

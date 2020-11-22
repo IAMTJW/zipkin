@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,15 +13,14 @@
  */
 package zipkin2.internal;
 
-import java.nio.ByteBuffer;
 import zipkin2.Endpoint;
 
-import static zipkin2.internal.Buffer.utf8SizeInBytes;
 import static zipkin2.internal.ThriftCodec.skip;
 import static zipkin2.internal.ThriftField.TYPE_I16;
 import static zipkin2.internal.ThriftField.TYPE_I32;
 import static zipkin2.internal.ThriftField.TYPE_STOP;
 import static zipkin2.internal.ThriftField.TYPE_STRING;
+import static zipkin2.internal.WriteBuffer.utf8SizeInBytes;
 
 final class ThriftEndpointCodec {
   static final byte[] INT_ZERO = {0, 0, 0, 0};
@@ -30,15 +29,15 @@ final class ThriftEndpointCodec {
   static final ThriftField SERVICE_NAME = new ThriftField(TYPE_STRING, 3);
   static final ThriftField IPV6 = new ThriftField(TYPE_STRING, 4);
 
-  static Endpoint read(ByteBuffer bytes) {
+  static Endpoint read(ReadBuffer buffer) {
     Endpoint.Builder result = Endpoint.newBuilder();
 
     while (true) {
-      ThriftField thriftField = ThriftField.read(bytes);
+      ThriftField thriftField = ThriftField.read(buffer);
       if (thriftField.type == TYPE_STOP) break;
 
       if (thriftField.isEqualTo(IPV4)) {
-        int ipv4 = bytes.getInt();
+        int ipv4 = buffer.readInt();
         if (ipv4 != 0) {
           result.parseIp( // allocation is ok here as Endpoint.ipv4Bytes would anyway
             new byte[] {
@@ -49,13 +48,13 @@ final class ThriftEndpointCodec {
             });
         }
       } else if (thriftField.isEqualTo(PORT)) {
-        result.port(bytes.getShort() & 0xFFFF);
+        result.port(buffer.readShort() & 0xFFFF);
       } else if (thriftField.isEqualTo(SERVICE_NAME)) {
-        result.serviceName(ThriftCodec.readUtf8(bytes));
+        result.serviceName(buffer.readUtf8(buffer.readInt()));
       } else if (thriftField.isEqualTo(IPV6)) {
-        result.parseIp(ThriftCodec.readByteArray(bytes));
+        result.parseIp(buffer.readBytes(buffer.readInt()));
       } else {
-        skip(bytes, thriftField.type);
+        skip(buffer, thriftField.type);
       }
     }
     return result.build();
@@ -72,7 +71,7 @@ final class ThriftEndpointCodec {
     return sizeInBytes;
   }
 
-  static void write(Endpoint value, Buffer buffer) {
+  static void write(Endpoint value, WriteBuffer buffer) {
     IPV4.write(buffer);
     buffer.write(value.ipv4Bytes() != null ? value.ipv4Bytes() : INT_ZERO);
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright 2015-2019 The OpenZipkin Authors
+    Copyright 2015-2020 The OpenZipkin Authors
 
     Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
     in compliance with the License. You may obtain a copy of the License at
@@ -18,13 +18,11 @@
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <groupId>io.zipkin.zipkin2</groupId>
-    <artifactId>parent</artifactId>
-    <version>2.12.7-SNAPSHOT</version>
+    <groupId>io.zipkin</groupId>
+    <artifactId>zipkin-parent</artifactId>
+    <version>2.22.3-SNAPSHOT</version>
   </parent>
 
-  <!-- TODO: group ID change: https://github.com/openzipkin/zipkin/issues/2132 -->
-  <groupId>io.zipkin.java</groupId>
   <artifactId>zipkin-server</artifactId>
   <name>Zipkin Server</name>
 
@@ -32,24 +30,47 @@
     <main.basedir>${project.basedir}/..</main.basedir>
     <main.java.version>1.8</main.java.version>
     <main.signature.artifact>java18</main.signature.artifact>
-    <start-class>zipkin.server.ZipkinServer</start-class>
-    <maven-invoker-plugin.version>3.2.0</maven-invoker-plugin.version>
+
+    <!-- Sometimes we need to override Armeria's Brave version -->
+    <brave.version>5.13.0</brave.version>
+    <proto.generatedSourceDirectory>${project.build.directory}/generated-test-sources/wire</proto.generatedSourceDirectory>
   </properties>
 
   <dependencyManagement>
     <dependencies>
       <dependency>
-        <!-- Import dependency management from Spring Boot -->
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-dependencies</artifactId>
-        <version>${spring-boot.version}</version>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-bom</artifactId>
+        <version>${netty.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+
       <dependency>
-        <groupId>com.linecorp.armeria</groupId>
-        <artifactId>armeria-bom</artifactId>
-        <version>${armeria.version}</version>
+        <groupId>io.zipkin.brave</groupId>
+        <artifactId>brave-bom</artifactId>
+        <version>${brave.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- Don't bring in brave's transitive dep on zipkin -->
+      <dependency>
+        <groupId>io.zipkin.brave</groupId>
+        <artifactId>brave</artifactId>
+        <version>${brave.version}</version>
+        <exclusions>
+          <exclusion>
+            <groupId>io.zipkin.zipkin2</groupId>
+            <artifactId>zipkin</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
+
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -57,162 +78,181 @@
   </dependencyManagement>
 
   <dependencies>
+    <!-- Makes sure spring doesn't eagerly bind tomcat or slf4j -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-web</artifactId>
+      <artifactId>spring-boot-starter</artifactId>
+      <version>${spring-boot.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-starter-logging</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+      <version>${spring-boot.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-starter-logging</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
-    <!-- Use log4j 2 instead of SLF4J to allow log4j 1.2 used by Kafka 0.8 to still work -->
+    <!-- Use log4j 2 as default logging implementation -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-log4j2</artifactId>
+      <version>${spring-boot.version}</version>
     </dependency>
 
     <!-- More efficient, gRPC ready server with brave tracing built-in -->
     <dependency>
-      <groupId>com.linecorp.armeria</groupId>
-      <artifactId>armeria-spring-boot-autoconfigure</artifactId>
+      <groupId>${armeria.groupId}</groupId>
+      <artifactId>armeria-spring-boot2-autoconfigure</artifactId>
+      <version>${armeria.version}</version>
       <exclusions>
         <exclusion>
-          <groupId>com.linecorp.armeria</groupId>
+          <groupId>${armeria.groupId}</groupId>
           <artifactId>armeria-logback</artifactId>
         </exclusion>
+        <exclusion>
+          <groupId>javax.validation</groupId>
+          <artifactId>validation-api</artifactId>
+        </exclusion>
       </exclusions>
     </dependency>
     <dependency>
-      <groupId>com.linecorp.armeria</groupId>
-      <artifactId>armeria-spring-boot-actuator-starter</artifactId>
+      <groupId>${armeria.groupId}</groupId>
+      <artifactId>armeria-brave</artifactId>
+      <version>${armeria.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.linecorp.armeria</groupId>
-      <artifactId>armeria-zipkin</artifactId>
-    </dependency>
-
-    <!-- zipkin requires exporting /health endpoint -->
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-actuator</artifactId>
+      <groupId>${armeria.groupId}</groupId>
+      <artifactId>armeria-grpc-protocol</artifactId>
+      <version>${armeria.version}</version>
     </dependency>
 
+    <!--Prometheus metrics-->
     <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-configuration-processor</artifactId>
-      <optional>true</optional>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <version>${micrometer.version}</version>
     </dependency>
 
     <dependency>
-      <groupId>io.zipkin.zipkin2</groupId>
+      <groupId>com.netflix.concurrency-limits</groupId>
+      <artifactId>concurrency-limits-core</artifactId>
+      <version>0.3.6</version>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <version>${micrometer.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>${project.groupId}.zipkin2</groupId>
       <artifactId>zipkin</artifactId>
+      <version>${project.version}</version>
     </dependency>
 
     <dependency>
-      <groupId>io.zipkin.zipkin2</groupId>
+      <groupId>${project.groupId}.zipkin2</groupId>
       <artifactId>zipkin-collector</artifactId>
+      <version>${project.version}</version>
     </dependency>
 
-    <!-- Static content for the web UI -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-ui</artifactId>
-      <version>${project.version}</version>
-      <optional>true</optional>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>jul-to-slf4j</artifactId>
+      <version>${slf4j.version}</version>
     </dependency>
 
-    <!-- Cassandra backend -->
+    <!-- the "exec" jar will exclude this -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-storage-cassandra</artifactId>
-      <version>${project.version}</version>
-      <optional>true</optional>
-      <exclusions>
-        <exclusion>
-          <groupId>com.datastax.cassandra</groupId>
-          <artifactId>cassandra-driver-core</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <!-- shaded to not interfere with netty 4.1 and boringssl. [JAVA-1241] -->
-    <dependency>
-      <groupId>com.datastax.cassandra</groupId>
-      <artifactId>cassandra-driver-core</artifactId>
-      <version>${cassandra-driver-core.version}</version>
-      <classifier>shaded</classifier>
-      <optional>true</optional>
-      <exclusions>
-        <exclusion>
-          <groupId>io.netty</groupId>
-          <artifactId>*</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <dependency>
-      <groupId>com.datastax.cassandra</groupId>
-      <artifactId>cassandra-driver-mapping</artifactId>
-      <version>${cassandra-driver-core.version}</version>
-      <optional>true</optional>
-      <exclusions>
-        <exclusion>
-          <groupId>com.datastax.cassandra</groupId>
-          <artifactId>cassandra-driver-core</artifactId>
-        </exclusion>
-      </exclusions>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+      <scope>provided</scope>
     </dependency>
 
-    <!-- Cassandra 3 backend -->
+    <!-- Optional, but packaged in the supported distribution -->
+
+    <!-- Cassandra and Cassandra 3 backends -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-storage-cassandra3</artifactId>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-storage-cassandra-v1</artifactId>
       <version>${project.version}</version>
       <optional>true</optional>
-      <exclusions>
-        <exclusion>
-          <groupId>com.datastax.cassandra</groupId>
-          <artifactId>cassandra-driver-core</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.datastax.cassandra</groupId>
-          <artifactId>cassandra-driver-mapping</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
 
     <!-- Elasticsearch http -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-storage-elasticsearch</artifactId>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-storage-elasticsearch</artifactId>
       <version>${project.version}</version>
       <optional>true</optional>
     </dependency>
 
     <!-- MySQL backend -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-storage-mysql</artifactId>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-storage-mysql-v1</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.mariadb.jdbc</groupId>
+      <artifactId>mariadb-java-client</artifactId>
+      <version>${mariadb-java-client.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <version>${HikariCP.version}</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- ActiveMQ Collector -->
+    <dependency>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-collector-activemq</artifactId>
       <version>${project.version}</version>
       <optional>true</optional>
     </dependency>
 
     <!-- Kafka Collector -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-collector-kafka</artifactId>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-collector-kafka</artifactId>
       <version>${project.version}</version>
       <optional>true</optional>
     </dependency>
 
     <!-- RabbitMQ Collector -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-collector-rabbitmq</artifactId>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-collector-rabbitmq</artifactId>
       <version>${project.version}</version>
       <optional>true</optional>
     </dependency>
 
-    <!--Prometheus metrics-->
+    <!-- Scribe Collector -->
     <dependency>
-      <groupId>io.zipkin.java</groupId>
-      <artifactId>zipkin-autoconfigure-metrics-prometheus</artifactId>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-collector-scribe</artifactId>
       <version>${project.version}</version>
+      <optional>true</optional>
     </dependency>
 
     <!-- Trace api controller activity with Brave -->
@@ -223,32 +263,111 @@
     </dependency>
     <dependency>
       <groupId>io.zipkin.brave</groupId>
-      <artifactId>brave-instrumentation-okhttp3</artifactId>
-      <version>${brave.version}</version>
+      <artifactId>brave-context-slf4j</artifactId>
       <optional>true</optional>
     </dependency>
-    <dependency>
-      <groupId>io.zipkin.brave</groupId>
-      <artifactId>brave-context-log4j2</artifactId>
-      <version>${brave.version}</version>
-      <optional>true</optional>
-    </dependency>
-    <dependency>
-      <groupId>io.zipkin.brave.cassandra</groupId>
-      <artifactId>brave-instrumentation-cassandra-driver</artifactId>
-      <optional>true</optional>
-    </dependency>
+<!--    <dependency>-->
+<!--      <groupId>io.zipkin.brave.cassandra</groupId>-->
+<!--      <artifactId>brave-instrumentation-cassandra-driver</artifactId>-->
+<!--      <version>0.10.3</version>-->
+<!--      <optional>true</optional>-->
+<!--    </dependency>-->
 
+    <!-- Test dependencies -->
+    <!-- to test the experimental grpc endpoint with the square/wire library -->
     <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-test</artifactId>
+      <groupId>io.zipkin.proto3</groupId>
+      <artifactId>zipkin-proto3</artifactId>
+      <version>${zipkin-proto3.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Our json codec is shaded, but Intellij doesn't understand that when running tests. -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>${gson.version}</version>
       <scope>test</scope>
     </dependency>
 
     <dependency>
-      <groupId>io.zipkin.zipkin2</groupId>
-      <artifactId>zipkin</artifactId>
-      <type>test-jar</type>
+      <groupId>com.squareup.wire</groupId>
+      <artifactId>wire-runtime</artifactId>
+      <version>${wire.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>com.squareup.okhttp3</groupId>
+      <artifactId>okhttp</artifactId>
+      <version>${okhttp.version}</version>
+      <scope>test</scope>
+      <exclusions>
+        <!-- let wire control the okio version -->
+        <exclusion>
+          <groupId>com.squareup.okio</groupId>
+          <artifactId>okio</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
+    <dependency>
+      <groupId>${armeria.groupId}</groupId>
+      <artifactId>armeria-junit5</artifactId>
+      <version>${armeria.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- TODO: port everything to jupiter -->
+    <dependency>
+      <groupId>${armeria.groupId}</groupId>
+      <artifactId>armeria-junit4</artifactId>
+      <version>${armeria.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Don't use spring-boot-starter-test as it complicates the dependency tree and causes heavier
+         downloads. We only need the spring-provided libraries -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-test-autoconfigure</artifactId>
+      <version>${spring-boot.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-test</artifactId>
+      <version>${spring-boot.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-test</artifactId>
+      <version>${spring.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>${project.groupId}.zipkin2</groupId>
+      <artifactId>zipkin-tests</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <version>${awaitility.version}</version>
       <scope>test</scope>
     </dependency>
 
@@ -262,40 +381,37 @@
 
   <profiles>
     <profile>
-      <id>integration</id>
+      <id>actuator</id>
       <activation>
-        <activeByDefault>true</activeByDefault>
+        <property>
+          <name>!skipActuator</name>
+        </property>
       </activation>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-invoker-plugin</artifactId>
-            <version>${maven-invoker-plugin.version}</version>
-            <configuration>
-              <cloneProjectsTo>${project.build.directory}/it</cloneProjectsTo>
-              <settingsFile>src/it/settings.xml</settingsFile>
-              <profiles>
-                <profile>!release</profile>
-              </profiles>
-              <localRepositoryPath>${project.build.directory}/local-repo</localRepositoryPath>
-              <postBuildHookScript>verify</postBuildHookScript>
-              <addTestClassPath>true</addTestClassPath>
-              <skipInvocation>${skipTests}</skipInvocation>
-              <streamLogs>true</streamLogs>
-            </configuration>
-            <executions>
-              <execution>
-                <id>integration-test</id>
-                <goals>
-                  <goal>install</goal>
-                  <goal>run</goal>
-                </goals>
-              </execution>
-            </executions>
-          </plugin>
-        </plugins>
-      </build>
+      <dependencies>
+        <!-- /actuator endpoints -->
+        <dependency>
+          <groupId>${armeria.groupId}</groupId>
+          <artifactId>armeria-spring-boot2-actuator-autoconfigure</artifactId>
+          <version>${armeria.version}</version>
+          <optional>true</optional>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>include-lens</id>
+      <activation>
+        <property>
+          <name>!skipLens</name>
+        </property>
+      </activation>
+      <dependencies>
+        <!-- Static content for the Lens UI -->
+        <dependency>
+          <groupId>${project.groupId}</groupId>
+          <artifactId>zipkin-lens</artifactId>
+          <version>${project.version}</version>
+        </dependency>
+      </dependencies>
     </profile>
   </profiles>
 
@@ -307,21 +423,197 @@
       </resource>
     </resources>
     <plugins>
+      <!-- wire-maven-plugin cannot get proto definitions from dependencies, so we will -->
+      <plugin>
+        <artifactId>maven-dependency-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>com.squareup.wire</groupId>
+        <artifactId>wire-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <phase>generate-test-sources</phase>
+            <goals>
+              <goal>generate-sources</goal>
+            </goals>
+            <configuration>
+              <generatedSourceDirectory>${proto.generatedSourceDirectory}</generatedSourceDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Adds the output directory from proto source generation for the test compiler -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.2.0</version>
+        <executions>
+          <execution>
+            <id>add-test-source</id>
+            <phase>generate-test-sources</phase>
+            <goals>
+              <goal>add-test-source</goal>
+            </goals>
+            <configuration>
+              <sources>
+                <source>${proto.generatedSourceDirectory}</source>
+              </sources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>pl.project13.maven</groupId>
+        <artifactId>git-commit-id-plugin</artifactId>
+        <version>${git-commit-id.version}</version>
+        <executions>
+          <execution>
+            <id>extract-git-info</id>
+            <goals>
+              <goal>revision</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <failOnNoGitDirectory>false</failOnNoGitDirectory>
+        </configuration>
+      </plugin>
+
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
         <configuration>
-          <classifier>exec</classifier>
+          <mainClass>zipkin.server.ZipkinServer</mainClass>
           <executable>true</executable>
         </configuration>
-      </plugin>
-      <!-- disable retrolambda since this module uses java 8 types -->
-      <plugin>
-        <groupId>net.orfjackal.retrolambda</groupId>
-        <artifactId>retrolambda-maven-plugin</artifactId>
         <executions>
           <execution>
-            <phase>none</phase>
+            <id>exec</id>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+            <configuration>
+              <classifier>exec</classifier>
+              <excludes>
+                <dependency>
+                  <groupId>org.slf4j</groupId>
+                  <artifactId>slf4j-simple</artifactId>
+                </dependency>
+              </excludes>
+            </configuration>
+          </execution>
+
+          <!-- Make a jar less than half the size, which only supports armeria-native features -->
+          <execution>
+            <id>slim</id>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+            <configuration>
+              <classifier>slim</classifier>
+              <!-- https://github.com/spring-projects/spring-boot/issues/3426 transitive exclude doesn't work -->
+              <excludeGroupIds>
+                com.google.auto.value,com.google.guava,io.dropwizard.metrics,com.datastax.oss,com.github.jnr,org.ow2.asm,org.jooq,javax.xml.bind,org.mariadb.jdbc,com.zaxxer,org.apache.activemq,org.apache.geronimo.specs,org.fusesource.hawtbuf,org.apache.kafka,com.github.luben,org.lz4,org.xerial.snappy,com.rabbitmq,jakarta.annotation,org.apache.thrift,org.apache.logging.log4j
+              </excludeGroupIds>
+              <excludes>
+                <!-- Actuator -->
+                <dependency>
+                  <groupId>${armeria.groupId}</groupId>
+                  <artifactId>armeria-spring-boot2-actuator-autoconfigure</artifactId>
+                </dependency>
+                <dependency>
+                  <groupId>org.springframework.boot</groupId>
+                  <artifactId>spring-boot-actuator-autoconfigure</artifactId>
+                </dependency>
+                <dependency>
+                  <groupId>org.springframework.boot</groupId>
+                  <artifactId>spring-boot-actuator</artifactId>
+                </dependency>
+                <dependency>
+                  <groupId>com.fasterxml.jackson.datatype</groupId>
+                  <artifactId>jackson-datatype-jsr310</artifactId>
+                </dependency>
+
+                <!-- Log4J 2 -->
+                <dependency>
+                  <groupId>org.springframework.boot</groupId>
+                  <artifactId>spring-boot-starter-log4j2</artifactId>
+                </dependency>
+
+                <!-- Unnecessary netty deps -->
+                <dependency>
+                  <groupId>io.netty</groupId>
+                  <artifactId>netty-tcnative-boringssl-static</artifactId>
+                </dependency>
+                <dependency>
+                  <groupId>io.netty</groupId>
+                  <artifactId>netty-codec-haproxy</artifactId>
+                </dependency>
+
+                <!-- Unnecessary micrometer deps -->
+                <!-- TODO: https://github.com/micrometer-metrics/micrometer/issues/1599 -->
+<!--                <dependency>-->
+<!--                  &lt;!&ndash; only used by TimeWindowPercentileHistogram &ndash;&gt;-->
+<!--                  <groupId>org.hdrhistogram</groupId>-->
+<!--                  <artifactId>HdrHistogram</artifactId>-->
+<!--                </dependency>-->
+<!--                <dependency>-->
+<!--                  &lt;!&ndash; we don't use pause detector &ndash;&gt;-->
+<!--                  <groupId>org.latencyutils</groupId>-->
+<!--                  <artifactId>LatencyUtils</artifactId>-->
+<!--                </dependency>-->
+
+                <!-- storage and collectors which have 3rd party deps -->
+                <dependency>
+                  <groupId>${project.groupId}.zipkin2</groupId>
+                  <artifactId>zipkin-storage-cassandra-v1</artifactId>
+                </dependency>
+                <dependency>
+                  <groupId>${project.groupId}.zipkin2</groupId>
+                  <artifactId>zipkin-storage-cassandra</artifactId>
+                </dependency>
+                <dependency>
+                  <groupId>io.zipkin.brave.cassandra</groupId>
+                  <artifactId>brave-instrumentation-cassandra-driver</artifactId>
+                </dependency>
+
+                <!-- MySQL backend -->
+                <dependency>
+                  <groupId>${project.groupId}.zipkin2</groupId>
+                  <artifactId>zipkin-storage-mysql-v1</artifactId>
+                </dependency>
+
+                <!-- ActiveMQ Collector -->
+                <dependency>
+                  <groupId>${project.groupId}.zipkin2</groupId>
+                  <artifactId>zipkin-collector-activemq</artifactId>
+                </dependency>
+
+                <!-- Kafka Collector -->
+                <dependency>
+                  <groupId>${project.groupId}.zipkin2</groupId>
+                  <artifactId>zipkin-collector-kafka</artifactId>
+                </dependency>
+
+                <!-- RabbitMQ Collector -->
+                <dependency>
+                  <groupId>${project.groupId}.zipkin2</groupId>
+                  <artifactId>zipkin-collector-rabbitmq</artifactId>
+                </dependency>
+
+                <!-- Scribe Collector -->
+                <dependency>
+                  <groupId>${project.groupId}.zipkin2</groupId>
+                  <artifactId>zipkin-collector-scribe</artifactId>
+                </dependency>
+                <exclude>
+                  <groupId>${armeria.groupId}</groupId>
+                  <artifactId>armeria-thrift0.13</artifactId>
+                </exclude>
+              </excludes>
+            </configuration>
           </execution>
         </executions>
       </plugin>

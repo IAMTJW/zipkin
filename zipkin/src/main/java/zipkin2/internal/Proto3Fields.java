@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,9 +13,10 @@
  */
 package zipkin2.internal;
 
-import java.util.Map;
+import zipkin2.Endpoint;
 
-import static zipkin2.internal.JsonCodec.UTF_8;
+import static zipkin2.internal.WriteBuffer.utf8SizeInBytes;
+import static zipkin2.internal.WriteBuffer.varintSizeInBytes;
 
 /**
  * Everything here assumes the field numbers are less than 16, implying a 1 byte tag.
@@ -37,7 +38,8 @@ final class Proto3Fields {
     final int fieldNumber;
     final int wireType;
     /**
-     * "Each key in the streamed message is a varint with the value {@code (field_number << 3) | wire_type}"
+     * "Each key in the streamed message is a varint with the value {@code (field_number << 3) |
+     * wire_type}"
      *
      * <p>See https://developers.google.com/protocol-buffers/docs/encoding#structure
      */
@@ -68,8 +70,8 @@ final class Proto3Fields {
       return wireType;
     }
 
-    static boolean skipValue(Buffer buffer, int wireType) {
-      int remaining = buffer.remaining();
+    static boolean skipValue(ReadBuffer buffer, int wireType) {
+      int remaining = buffer.available();
       switch (wireType) {
         case WIRETYPE_VARINT:
           for (int i = 0; i < remaining; i++) {
@@ -77,19 +79,26 @@ final class Proto3Fields {
           }
           return false;
         case WIRETYPE_FIXED64:
-          return buffer.skip(8);
+          return buffer.skip(8) == 8;
         case WIRETYPE_LENGTH_DELIMITED:
           int length = buffer.readVarint32();
-          return buffer.skip(length);
+          return buffer.skip(length) == length;
         case WIRETYPE_FIXED32:
-          return buffer.skip(4);
+          return buffer.skip(4) == 4;
         default:
           throw new IllegalArgumentException(
-            "Malformed: invalid wireType " + wireType + " at byte " + buffer.pos);
+            "Malformed: invalid wireType " + wireType + " at byte " + buffer.pos());
       }
     }
   }
 
+  /**
+   * Leniently skips out null, but not on empty string, allowing tag "error" -> "" to serialize
+   * properly.
+   *
+   * <p>This won't result in empty {@link zipkin2.Span#name()} or {@link Endpoint#serviceName()}
+   * because in both cases constructors coerce empty values to null.
+   */
   static abstract class LengthDelimitedField<T> extends Field {
     LengthDelimitedField(int key) {
       super(key);
@@ -99,14 +108,12 @@ final class Proto3Fields {
     final int sizeInBytes(T value) {
       if (value == null) return 0;
       int sizeOfValue = sizeOfValue(value);
-      if (sizeOfValue == 0) return 0;
       return sizeOfLengthDelimitedField(sizeOfValue);
     }
 
-    final void write(Buffer b, T value) {
+    final void write(WriteBuffer b, T value) {
       if (value == null) return;
       int sizeOfValue = sizeOfValue(value);
-      if (sizeOfValue == 0) return;
       b.writeByte(key);
       b.writeVarint(sizeOfValue); // length prefix
       writeValue(b, value);
@@ -116,24 +123,18 @@ final class Proto3Fields {
      * Calling this after consuming the field key to ensures there's enough space for the data. Null
      * is returned when the length prefix is zero.
      */
-    final T readLengthPrefixAndValue(Buffer b) {
-      int length = readLengthPrefix(b);
+    final T readLengthPrefixAndValue(ReadBuffer b) {
+      int length = b.readVarint32();
       if (length == 0) return null;
       return readValue(b, length);
     }
 
-    final int readLengthPrefix(Buffer b) {
-      int length = b.readVarint32();
-      Proto3Fields.ensureLength(b, length);
-      return length;
-    }
-
     abstract int sizeOfValue(T value);
 
-    abstract void writeValue(Buffer b, T value);
+    abstract void writeValue(WriteBuffer b, T value);
 
     /** @param length is greater than zero */
-    abstract T readValue(Buffer b, int length);
+    abstract T readValue(ReadBuffer b, int length);
   }
 
   static class BytesField extends LengthDelimitedField<byte[]> {
@@ -145,22 +146,16 @@ final class Proto3Fields {
       return bytes.length;
     }
 
-    @Override void writeValue(Buffer b, byte[] bytes) {
+    @Override void writeValue(WriteBuffer b, byte[] bytes) {
       b.write(bytes);
     }
 
-    @Override byte[] readValue(Buffer b, int length) {
-      byte[] result = new byte[length];
-      System.arraycopy(b.toByteArray(), b.pos, result, 0, length);
-      b.pos += length;
-      return result;
+    @Override byte[] readValue(ReadBuffer b, int length) {
+      return b.readBytes(length);
     }
   }
 
   static class HexField extends LengthDelimitedField<String> {
-    static final char[] HEX_DIGITS =
-      {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
-
     HexField(int key) {
       super(key);
     }
@@ -170,7 +165,7 @@ final class Proto3Fields {
       return hex.length() / 2;
     }
 
-    @Override void writeValue(Buffer b, String hex) {
+    @Override void writeValue(WriteBuffer b, String hex) {
       // similar logic to okio.ByteString.decodeHex
       for (int i = 0, length = hex.length(); i < length; i++) {
         int d1 = decodeLowerHex(hex.charAt(i++)) << 4;
@@ -185,17 +180,8 @@ final class Proto3Fields {
       throw new AssertionError("not lowerHex " + c); // bug
     }
 
-    @Override String readValue(Buffer buffer, int length) {
-      length *= 2;
-      char[] result = new char[length];
-
-      for (int i = 0; i < length; i += 2) {
-        byte b = buffer.readByte();
-        result[i + 0] = HEX_DIGITS[(b >> 4) & 0xf];
-        result[i + 1] = HEX_DIGITS[b & 0xf];
-      }
-
-      return new String(result);
+    @Override String readValue(ReadBuffer buffer, int length) {
+      return buffer.readBytesAsHex(length);
     }
   }
 
@@ -205,17 +191,15 @@ final class Proto3Fields {
     }
 
     @Override int sizeOfValue(String utf8) {
-      return utf8 != null ? Buffer.utf8SizeInBytes(utf8) : 0;
+      return utf8 != null ? utf8SizeInBytes(utf8) : 0;
     }
 
-    @Override void writeValue(Buffer b, String utf8) {
+    @Override void writeValue(WriteBuffer b, String utf8) {
       b.writeUtf8(utf8);
     }
 
-    @Override String readValue(Buffer buffer, int length) {
-      String result = new String(buffer.toByteArray(), buffer.pos, length, UTF_8);
-      buffer.pos += length;
-      return result;
+    @Override String readValue(ReadBuffer buffer, int length) {
+      return buffer.readUtf8(length);
     }
   }
 
@@ -225,7 +209,7 @@ final class Proto3Fields {
       assert wireType == WIRETYPE_FIXED64;
     }
 
-    void write(Buffer b, long number) {
+    void write(WriteBuffer b, long number) {
       if (number == 0) return;
       b.writeByte(key);
       b.writeLongLe(number);
@@ -236,8 +220,7 @@ final class Proto3Fields {
       return 1 + 8; // tag + 8 byte number
     }
 
-    long readValue(Buffer buffer) {
-      ensureLength(buffer, 8);
+    long readValue(ReadBuffer buffer) {
       return buffer.readLongLe();
     }
   }
@@ -249,20 +232,20 @@ final class Proto3Fields {
     }
 
     int sizeInBytes(int number) {
-      return number != 0 ? 1 + Buffer.varintSizeInBytes(number) : 0; // tag + varint
+      return number != 0 ? 1 + varintSizeInBytes(number) : 0; // tag + varint
     }
 
-    void write(Buffer b, int number) {
+    void write(WriteBuffer b, int number) {
       if (number == 0) return;
       b.writeByte(key);
       b.writeVarint(number);
     }
 
     int sizeInBytes(long number) {
-      return number != 0 ? 1 + Buffer.varintSizeInBytes(number) : 0; // tag + varint
+      return number != 0 ? 1 + varintSizeInBytes(number) : 0; // tag + varint
     }
 
-    void write(Buffer b, long number) {
+    void write(WriteBuffer b, long number) {
       if (number == 0) return;
       b.writeByte(key);
       b.writeVarint(number);
@@ -279,16 +262,16 @@ final class Proto3Fields {
       return bool ? 2 : 0; // tag + varint
     }
 
-    void write(Buffer b, boolean bool) {
+    void write(WriteBuffer b, boolean bool) {
       if (!bool) return;
       b.writeByte(key);
       b.writeByte(1);
     }
 
-    boolean read(Buffer b) {
+    boolean read(ReadBuffer b) {
       byte bool = b.readByte();
       if (bool < 0 || bool > 1) {
-        throw new IllegalArgumentException("Malformed: invalid boolean value at byte " + b.pos);
+        throw new IllegalArgumentException("Malformed: invalid boolean value at byte " + b.pos());
       }
       return bool == 1;
     }
@@ -308,13 +291,6 @@ final class Proto3Fields {
   }
 
   static int sizeOfLengthDelimitedField(int sizeInBytes) {
-    return 1 + Buffer.varintSizeInBytes(sizeInBytes) + sizeInBytes; // tag + len + bytes
-  }
-
-  static void ensureLength(Buffer buffer, int length) {
-    if (length > buffer.remaining()) {
-      throw new IllegalArgumentException(
-        "Truncated: length " + length + " > bytes remaining " + buffer.remaining());
-    }
+    return 1 + varintSizeInBytes(sizeInBytes) + sizeInBytes; // tag + len + bytes
   }
 }

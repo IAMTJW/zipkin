@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -21,12 +21,15 @@ import java.util.concurrent.Executor;
 import javax.sql.DataSource;
 import org.jooq.ExecuteListenerProvider;
 import org.jooq.conf.Settings;
+import zipkin2.Call;
 import zipkin2.CheckResult;
 import zipkin2.internal.Nullable;
 import zipkin2.storage.AutocompleteTags;
+import zipkin2.storage.ServiceAndSpanNames;
 import zipkin2.storage.SpanConsumer;
 import zipkin2.storage.SpanStore;
 import zipkin2.storage.StorageComponent;
+import zipkin2.storage.Traces;
 
 import static zipkin2.storage.mysql.v1.internal.generated.tables.ZipkinAnnotations.ZIPKIN_ANNOTATIONS;
 import static zipkin2.storage.mysql.v1.internal.generated.tables.ZipkinDependencies.ZIPKIN_DEPENDENCIES;
@@ -88,7 +91,8 @@ public final class MySQLStorage extends StorageComponent {
       return new MySQLStorage(this);
     }
 
-    Builder() {}
+    Builder() {
+    }
   }
 
   static {
@@ -131,32 +135,41 @@ public final class MySQLStorage extends StorageComponent {
     return schema;
   }
 
-  @Override
-  public SpanStore spanStore() {
+  @Override public SpanStore spanStore() {
     return new MySQLSpanStore(this, schema());
+  }
+
+  @Override public Traces traces() {
+    return (Traces) spanStore();
+  }
+
+  @Override public ServiceAndSpanNames serviceAndSpanNames() {
+    return (ServiceAndSpanNames) spanStore();
   }
 
   @Override public AutocompleteTags autocompleteTags() {
     return new MySQLAutocompleteTags(this, schema());
   }
 
-  @Override
-  public SpanConsumer spanConsumer() {
+  @Override public SpanConsumer spanConsumer() {
     return new MySQLSpanConsumer(dataSourceCallFactory, schema());
   }
 
-  @Override
-  public CheckResult check() {
+  @Override public CheckResult check() {
     try (Connection conn = datasource.getConnection()) {
       context.get(conn).select(ZIPKIN_SPANS.TRACE_ID).from(ZIPKIN_SPANS).limit(1).execute();
-    } catch (SQLException | RuntimeException e) {
+    } catch (Throwable e) {
+      Call.propagateIfFatal(e);
       return CheckResult.failed(e);
     }
     return CheckResult.OK;
   }
 
-  @Override
-  public void close() {
+  @Override public final String toString() {
+    return "MySQLStorage{datasource=" + datasource + "}";
+  }
+
+  @Override public void close() {
     // didn't open the DataSource or executor
   }
 

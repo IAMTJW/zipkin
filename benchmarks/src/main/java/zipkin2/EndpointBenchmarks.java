@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -36,10 +36,10 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 @Measurement(iterations = 5, time = 1)
 @Warmup(iterations = 10, time = 1)
 @Fork(3)
-@BenchmarkMode(Mode.AverageTime)
+@BenchmarkMode(Mode.SampleTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @State(Scope.Thread)
-@Threads(1)
+@Threads(2)
 public class EndpointBenchmarks {
   static final String IPV4 = "43.0.192.2", IPV6 = "2001:db8::c001";
   static final InetAddress IPV4_ADDR, IPV6_ADDR;
@@ -63,6 +63,10 @@ public class EndpointBenchmarks {
     return builder.parseIp(IPV4_ADDR);
   }
 
+  @Benchmark public boolean parseIpv4_bytes() {
+    return builder.parseIp(IPV4_ADDR.getAddress());
+  }
+
   @Benchmark public boolean parseIpv6_literal() {
     return builder.parseIp(IPV6);
   }
@@ -71,9 +75,14 @@ public class EndpointBenchmarks {
     return builder.parseIp(IPV6_ADDR);
   }
 
+  @Benchmark public boolean parseIpv6_bytes() {
+    return builder.parseIp(IPV6_ADDR.getAddress());
+  }
+
   // Convenience main entry-point
   public static void main(String[] args) throws RunnerException {
     Options opt = new OptionsBuilder()
+      .addProfiler("gc")
       .include(".*" + EndpointBenchmarks.class.getSimpleName())
       .build();
 

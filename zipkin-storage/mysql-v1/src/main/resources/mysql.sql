@@ -1,18 +1,33 @@
+--
+-- Copyright 2015-2019 The OpenZipkin Authors
+--
+-- Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+-- in compliance with the License. You may obtain a copy of the License at
+--
+-- http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing, software distributed under the License
+-- is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+-- or implied. See the License for the specific language governing permissions and limitations under
+-- the License.
+--
+
 CREATE TABLE IF NOT EXISTS zipkin_spans (
   `trace_id_high` BIGINT NOT NULL DEFAULT 0 COMMENT 'If non zero, this means the trace uses 128 bit traceIds instead of 64 bit',
   `trace_id` BIGINT NOT NULL,
   `id` BIGINT NOT NULL,
   `name` VARCHAR(255) NOT NULL,
+  `remote_service_name` VARCHAR(255),
   `parent_id` BIGINT,
   `debug` BIT(1),
   `start_ts` BIGINT COMMENT 'Span.timestamp(): epoch micros used for endTs query and to implement TTL',
-  `duration` BIGINT COMMENT 'Span.duration(): micros used for minDuration and maxDuration query'
+  `duration` BIGINT COMMENT 'Span.duration(): micros used for minDuration and maxDuration query',
+  PRIMARY KEY (`trace_id_high`, `trace_id`, `id`)
 ) ENGINE=InnoDB ROW_FORMAT=COMPRESSED CHARACTER SET=utf8 COLLATE utf8_general_ci;
 
-ALTER TABLE zipkin_spans ADD UNIQUE KEY(`trace_id_high`, `trace_id`, `id`) COMMENT 'ignore insert on duplicate';
-ALTER TABLE zipkin_spans ADD INDEX(`trace_id_high`, `trace_id`, `id`) COMMENT 'for joining with zipkin_annotations';
 ALTER TABLE zipkin_spans ADD INDEX(`trace_id_high`, `trace_id`) COMMENT 'for getTracesByIds';
 ALTER TABLE zipkin_spans ADD INDEX(`name`) COMMENT 'for getTraces and getSpanNames';
+ALTER TABLE zipkin_spans ADD INDEX(`remote_service_name`) COMMENT 'for getTraces and getRemoteServiceNames';
 ALTER TABLE zipkin_spans ADD INDEX(`start_ts`) COMMENT 'for getTraces ordering and range';
 
 CREATE TABLE IF NOT EXISTS zipkin_annotations (
@@ -42,7 +57,6 @@ CREATE TABLE IF NOT EXISTS zipkin_dependencies (
   `parent` VARCHAR(255) NOT NULL,
   `child` VARCHAR(255) NOT NULL,
   `call_count` BIGINT,
-  `error_count` BIGINT
+  `error_count` BIGINT,
+  PRIMARY KEY (`day`, `parent`, `child`)
 ) ENGINE=InnoDB ROW_FORMAT=COMPRESSED CHARACTER SET=utf8 COLLATE utf8_general_ci;
-
-ALTER TABLE zipkin_dependencies ADD UNIQUE KEY(`day`, `parent`, `child`);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -14,6 +14,7 @@
 package zipkin2.junit;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -29,7 +30,6 @@ import zipkin2.DependencyLink;
 import zipkin2.Span;
 import zipkin2.collector.InMemoryCollectorMetrics;
 import zipkin2.internal.Nullable;
-import zipkin2.internal.Platform;
 import zipkin2.storage.InMemoryStorage;
 
 import static okhttp3.mockwebserver.SocketPolicy.KEEP_OPEN;
@@ -50,28 +50,24 @@ public final class ZipkinRule implements TestRule {
   private final AtomicInteger receivedSpanBytes = new AtomicInteger();
 
   public ZipkinRule() {
-    Dispatcher dispatcher =
-        new Dispatcher() {
-          final ZipkinDispatcher successDispatch = new ZipkinDispatcher(storage, metrics, server);
+    final ZipkinDispatcher successDispatch = new ZipkinDispatcher(storage, metrics, server);
+    Dispatcher dispatcher = new Dispatcher() {
+      @Override public MockResponse dispatch(RecordedRequest request) {
+        MockResponse maybeFailure = failureQueue.poll();
+        if (maybeFailure != null) return maybeFailure;
+        MockResponse result = successDispatch.dispatch(request);
+        if (request.getMethod().equals("POST")) {
+          receivedSpanBytes.addAndGet((int) request.getBodySize());
+        }
+        return result;
+      }
 
-          @Override
-          public MockResponse dispatch(RecordedRequest request) {
-            MockResponse maybeFailure = failureQueue.poll();
-            if (maybeFailure != null) return maybeFailure;
-            MockResponse result = successDispatch.dispatch(request);
-            if (request.getMethod().equals("POST")) {
-              receivedSpanBytes.addAndGet((int) request.getBodySize());
-            }
-            return result;
-          }
-
-          @Override
-          public MockResponse peek() {
-            MockResponse maybeFailure = failureQueue.peek();
-            if (maybeFailure != null) return maybeFailure.clone();
-            return new MockResponse().setSocketPolicy(KEEP_OPEN);
-          }
-        };
+      @Override public MockResponse peek() {
+        MockResponse maybeFailure = failureQueue.peek();
+        if (maybeFailure != null) return maybeFailure.clone();
+        return new MockResponse().setSocketPolicy(KEEP_OPEN);
+      }
+    };
     server.setDispatcher(dispatcher);
   }
 
@@ -100,7 +96,7 @@ public final class ZipkinRule implements TestRule {
     try {
       storage.accept(spans).execute();
     } catch (IOException e) {
-      throw Platform.get().uncheckedIOException(e);
+      throw new UncheckedIOException(e);
     }
     return this;
   }
@@ -126,14 +122,16 @@ public final class ZipkinRule implements TestRule {
     return storage.spanStore().getTraces();
   }
 
-  /** Retrieves a trace by ID which zipkin server has received, or null if not present. */
-  @Nullable
-  public List<Span> getTrace(String traceId) {
+  /** Retrieves a trace by ID which Zipkin server has received, or null if not present. */
+  @Nullable public List<Span> getTrace(String traceId) {
+    List<Span> result;
     try {
-      return storage.spanStore().getTrace(traceId).execute();
+      result = storage.traces().getTrace(traceId).execute();
     } catch (IOException e) {
-      throw Platform.get().assertionError("I/O exception in in-memory storage", e);
+      throw new AssertionError("I/O exception in in-memory storage", e);
     }
+    // Note: this is a different behavior than Traces.getTrace() which is not nullable!
+    return result.isEmpty() ? null : result;
   }
 
   /** Retrieves all service links between traces this zipkin server has received. */
@@ -150,13 +148,14 @@ public final class ZipkinRule implements TestRule {
     server.start(httpPort);
   }
 
-  /** Used to manually stop the server. */
+  /**
+   * Used to manually stop the server.
+   */
   public void shutdown() throws IOException {
     server.shutdown();
   }
 
-  @Override
-  public Statement apply(Statement base, Description description) {
+  @Override public Statement apply(Statement base, Description description) {
     return server.apply(base, description);
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,105 +13,94 @@
  */
 package zipkin2.collector.rabbitmq;
 
-import com.rabbitmq.client.Channel;
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.concurrent.TimeoutException;
+import java.time.Duration;
 import org.junit.AssumptionViolatedException;
+import org.junit.ClassRule;
 import org.junit.rules.ExternalResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.utility.DockerImageName;
 import zipkin2.CheckResult;
-import zipkin2.collector.InMemoryCollectorMetrics;
-import zipkin2.storage.InMemoryStorage;
 
+import static java.util.Arrays.asList;
+import static zipkin2.Call.propagateIfFatal;
+
+/** This should be used as a {@link ClassRule} as it takes a very long time to start-up. */
 class RabbitMQCollectorRule extends ExternalResource {
   static final Logger LOGGER = LoggerFactory.getLogger(RabbitMQCollectorRule.class);
+  // Use a ghcr.io mirror to prevent build outages due to Docker Hub pull quotas
+  static final DockerImageName IMAGE =
+    DockerImageName.parse("ghcr.io/openzipkin/rabbitmq-management-alpine:latest");
+  static final String QUEUE = "zipkin-test1";
   static final int RABBIT_PORT = 5672;
+  GenericContainer<?> container;
 
-  final InMemoryStorage storage = InMemoryStorage.newBuilder().build();
-  final InMemoryCollectorMetrics metrics = new InMemoryCollectorMetrics();
-  final InMemoryCollectorMetrics rabbitmqMetrics = metrics.forTransport("rabbitmq");
+  @Override protected void before() {
+    if ("true".equals(System.getProperty("docker.skip"))) {
+      throw new AssumptionViolatedException("Skipping startup of docker " + IMAGE);
+    }
 
-  final String image;
-  GenericContainer container;
-  RabbitMQCollector collector;
-
-  RabbitMQCollectorRule(String image) {
-    this.image = image;
-  }
-
-  @Override
-  protected void before() {
     try {
-      LOGGER.info("Starting docker image " + image);
-      container = new GenericContainer(image).withExposedPorts(RABBIT_PORT);
+      LOGGER.info("Starting docker image " + IMAGE);
+      container = new GenericContainer<>(IMAGE)
+        .withExposedPorts(RABBIT_PORT)
+        .waitingFor(Wait.forLogMessage(".*Server startup complete.*", 1)
+          .withStartupTimeout(Duration.ofSeconds(60)));
       container.start();
-    } catch (RuntimeException e) {
-      LOGGER.warn("Couldn't start docker image " + image + ": " + e.getMessage(), e);
+    } catch (Throwable e) {
+      throw new AssumptionViolatedException(
+        "Couldn't start docker image " + IMAGE + ": " + e.getMessage(), e);
     }
 
-    try {
-      this.collector = tryToInitializeCollector();
-    } catch (RuntimeException | Error e) {
-      if (container == null) throw e;
-      LOGGER.warn("Couldn't connect to docker image " + image + ": " + e.getMessage(), e);
-      container.stop();
-      container = null; // try with local connection instead
-      this.collector = tryToInitializeCollector();
-    }
+    declareQueue(QUEUE);
   }
 
-  RabbitMQCollector tryToInitializeCollector() {
-    RabbitMQCollector result = computeCollectorBuilder().build();
-    result.start();
+  RabbitMQCollector tryToInitializeCollector(RabbitMQCollector.Builder collectorBuilder) {
+    RabbitMQCollector result = collectorBuilder.build();
 
-    CheckResult check = result.check();
-    if (!check.ok()) {
-      throw new AssumptionViolatedException(check.error().getMessage(), check.error());
+    CheckResult check;
+    try {
+      check = result.check();
+    } catch (Throwable e) {
+      propagateIfFatal(e);
+      throw new AssertionError("collector.check shouldn't propagate errors", e);
     }
+
+    if (!check.ok()) {
+      throw new AssumptionViolatedException(
+        "Couldn't connect to docker container " + container + ": " +
+          check.error().getMessage(), check.error());
+    }
+
     return result;
   }
 
-  RabbitMQCollector.Builder computeCollectorBuilder() {
-    return RabbitMQCollector.builder()
-        .storage(storage)
-        .metrics(metrics)
-        .queue("zipkin-test")
-        .addresses(Arrays.asList(address()));
+  RabbitMQCollector.Builder newCollectorBuilder() {
+    return RabbitMQCollector.builder().queue(QUEUE).addresses(
+      asList(container.getContainerIpAddress() + ":" + container.getMappedPort(RABBIT_PORT)));
   }
 
-  String address() {
-    if (container != null && container.isRunning()) {
-      return String.format(
-          "%s:%d", container.getContainerIpAddress(), container.getMappedPort(RABBIT_PORT));
-    } else {
-      // Use localhost if we failed to start a container (i.e. Docker is not available)
-      return "localhost:" + RABBIT_PORT;
+  void declareQueue(String queue) {
+    ExecResult result;
+    try {
+      result = container.execInContainer("rabbitmqadmin", "declare", "queue", "name=" + queue);
+    } catch (Throwable e) {
+      propagateIfFatal(e);
+      throw new AssumptionViolatedException(
+        "Couldn't declare queue " + queue + ": " + e.getMessage(), e);
+    }
+    if (result.getExitCode() != 0) {
+      throw new AssumptionViolatedException("Couldn't declare queue " + queue + ": " + result);
     }
   }
 
-  void publish(byte[] message) throws IOException, TimeoutException {
-    Channel channel = collector.connection.get().createChannel();
-    try {
-      channel.basicPublish("", collector.queue, null, message);
-    } finally {
-      channel.close();
-    }
-  }
-
-  @Override
-  protected void after() {
-    try {
-      if (collector != null) collector.close();
-    } catch (IOException e) {
-      LOGGER.warn("error closing collector " + e.getMessage(), e);
-    } finally {
-      if (container != null) {
-        LOGGER.info("Stopping docker image " + image);
-        container.stop();
-      }
+  @Override protected void after() {
+    if (container != null) {
+      LOGGER.info("Stopping docker container " + container);
+      container.stop();
     }
   }
 }

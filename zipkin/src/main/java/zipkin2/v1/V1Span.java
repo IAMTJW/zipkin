@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -94,7 +94,7 @@ public final class V1Span {
 
   /** Returns the distinct {@link Endpoint#serviceName() service names} that logged to this span. */
   public Set<String> serviceNames() {
-    Set<String> result = new LinkedHashSet<>();
+    Set<String> result = new LinkedHashSet<String>();
     for (V1Annotation a : annotations) {
       if (a.endpoint == null) continue;
       if (a.endpoint.serviceName() == null) continue;
@@ -137,17 +137,17 @@ public final class V1Span {
   public static final class Builder {
     // ID accessors are here to help organize builders by their identifiers
 
-    /** @see V1Span#traceIdHigh() */
+    /** Sets {@link V1Span#traceIdHigh()} */
     public long traceIdHigh() {
       return traceIdHigh;
     }
 
-    /** @see V1Span#traceId() */
+    /** Sets {@link V1Span#traceId()} */
     public long traceId() {
       return traceId;
     }
 
-    /** @see V1Span#id() */
+    /** Sets {@link V1Span#id()} */
     public long id() {
       return id;
     }
@@ -182,19 +182,19 @@ public final class V1Span {
       return this;
     }
 
-    /** @see V1Span#traceId() */
+    /** Sets {@link V1Span#traceId()} */
     public Builder traceId(long traceId) {
       this.traceId = traceId;
       return this;
     }
 
-    /** @see V1Span#traceIdHigh() */
+    /** Sets {@link V1Span#traceIdHigh()} */
     public Builder traceIdHigh(long traceIdHigh) {
       this.traceIdHigh = traceIdHigh;
       return this;
     }
 
-    /** @see V1Span#id() */
+    /** Sets {@link V1Span#id()} */
     public Builder id(long id) {
       this.id = id;
       return this;
@@ -213,33 +213,33 @@ public final class V1Span {
       return this;
     }
 
-    /** @see V1Span#parentId() */
+    /** Sets {@link V1Span#parentId()} */
     public Builder parentId(long parentId) {
       this.parentId = parentId;
       return this;
     }
 
-    /** @see V1Span#name() */
+    /** Sets {@link V1Span#name()} */
     public Builder name(String name) {
       this.name = name == null || name.isEmpty() ? null : name.toLowerCase(Locale.ROOT);
       return this;
     }
 
-    /** @see V1Span#timestamp() */
+    /** Sets {@link V1Span#timestamp()} */
     public Builder timestamp(long timestamp) {
       this.timestamp = timestamp;
       return this;
     }
 
-    /** @see V1Span#duration() */
+    /** Sets {@link V1Span#duration()} */
     public Builder duration(long duration) {
       this.duration = duration;
       return this;
     }
 
-    /** @see V1Span#annotations() */
+    /** Sets {@link V1Span#annotations()} */
     public Builder addAnnotation(long timestamp, String value, @Nullable Endpoint endpoint) {
-      if (annotations == null) annotations = new ArrayList<>(4);
+      if (annotations == null) annotations = new ArrayList<V1Annotation>(4);
       if (EMPTY_ENDPOINT.equals(endpoint)) endpoint = null;
       annotations.add(new V1Annotation(timestamp, value, endpoint));
       return this;
@@ -250,7 +250,7 @@ public final class V1Span {
       // Ignore empty endpoints rather than crashing v1 parsers on bad address data
       if (endpoint == null || EMPTY_ENDPOINT.equals(endpoint)) return this;
 
-      if (binaryAnnotations == null) binaryAnnotations = new ArrayList<>(4);
+      if (binaryAnnotations == null) binaryAnnotations = new ArrayList<V1BinaryAnnotation>(4);
       binaryAnnotations.add(new V1BinaryAnnotation(address, null, endpoint));
       return this;
     }
@@ -264,12 +264,12 @@ public final class V1Span {
     public Builder addBinaryAnnotation(String key, String value, Endpoint endpoint) {
       if (value == null) throw new NullPointerException("value == null");
       if (EMPTY_ENDPOINT.equals(endpoint)) endpoint = null;
-      if (binaryAnnotations == null) binaryAnnotations = new ArrayList<>(4);
+      if (binaryAnnotations == null) binaryAnnotations = new ArrayList<V1BinaryAnnotation>(4);
       binaryAnnotations.add(new V1BinaryAnnotation(key, value, endpoint));
       return this;
     }
 
-    /** @see V1Span#debug() */
+    /** Sets {@link V1Span#debug()} */
     public Builder debug(@Nullable Boolean debug) {
       this.debug = debug;
       return this;
@@ -326,6 +326,6 @@ public final class V1Span {
   static <T extends Comparable<T>> List<T> sortedList(List<T> input) {
     if (input == null) return Collections.emptyList();
     Collections.sort(input);
-    return unmodifiableList(new ArrayList<>(input));
+    return unmodifiableList(new ArrayList<T>(input));
   }
 }

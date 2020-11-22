@@ -1,6 +1,6 @@
 # Zipkin Lens
 
-Zipkin-lens is an alternative UI for [OpenZipkin](https://github.com/openzipkin/zipkin), which based on React, Netflix/vizceral and chartjs.
+Zipkin-lens is the UI for [Zipkin](https://github.com/openzipkin/zipkin). It is a modern replacement of the [classic](https://github.com/openzipkin-attic/zipkin-classic) UI which has proved its merit since the beginning of the Zipkin project.
 
 Here are a couple example screen shots:
 
@@ -9,22 +9,88 @@ Here are a couple example screen shots:
 
 ## Quick start
 
-Zipkin-lens required nodejs 10.2.0 to start. You could easily try Zipkin-lens at local using any zipkin deployment using below command:
+In the project directory, you can run:
+
+### `npm start`
+
+Runs the app in the development mode.<br />
+Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+
+The page will reload if you make edits.<br />
+You will also see any lint errors in the console.
+
+By default, API requests are proxied to `http://localhost:9411`. You can change this target using
+the `API_BASE` environment variable, e.g., `API_BASE=http://tracing.company.com npm start`.
+
+### `npm test`
+
+Launches the test runner in the interactive watch mode.<br />
+See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+
+To get a coverage report as well, run `npm test -- --coverage`.
+
+### `npm run build`
+
+Builds the app for production to the `build` folder.<br />
+It correctly bundles React in production mode and optimizes the build for the best performance.
+
+## Localization
+
+We use [LinguiJS](https://lingui.js.org/) for localization of the UI. Translations for strings are
+found in the JSON files under [here](./src/translations). The Javascript files in the directory are
+compiled from the JSON files. We're always excited to have help maintaining these translations - if
+you see a string in the UI that is not translated or mistranslated, please feel free to send a PR to
+the JSON file to fix it. If you can, please run `yarn run compile` to also compile the translation
+into the output. If it's tedious to set up an environment for it, though, don't worry we'll take care
+of it.
+
+### Adding a new locale
+
+To add a new translated locale, first edit [.linguirc](./.linguirc) and add the locale to the
+`locales` section. Next, run `yarn run extract` to extract a new file under `src/translations` for
+the locale. Translate as many strings in the JSON file as you can. Then run `yarn run compile` to
+compile the strings.
+
+Finally, edit [App.jsx](./src/components/App/App.jsx) and
+[LanguageSelector.tsx](./src/components/App/LanguageSelector.tsx) to import the new translation and
+add an entry to the language selector respectively.
+
+## Dev Tools
+
+As the app is a SPA using React, it can be difficult to debug issues using native browser tools because
+the HTML does not map directly to any source code. It is recommended to install these extensions if you
+need to debug the page (they will only work with the local dev server, not a production build).
+
+### React Developer Tools
+
+Chrome: https://chrome.google.com/webstore/detail/react-developer-tools/fmkadmapgofadopljbjfkapdkoienihi
+Firefox: https://addons.mozilla.org/en-US/firefox/addon/react-devtools/
+
+### Redux DevTools
+
+Chrome: https://chrome.google.com/webstore/detail/redux-devtools/lmhkpmbekcpmknklioeibfkpmmfibljd
+Firefox: https://addons.mozilla.org/en-US/firefox/addon/reduxdevtools/
+
+## Running behind a reverse proxy
+Since version `2.20`, Zipkin Lens supports running under an arbitrary context root. As a result,
+it can be proxied under a different path than `/zipkin/` such as `/proxy/foo/myzipkin/`.
+
+As an example, here is the configuration for Apache HTTPD acting as a reverse proxy
+for a Zipkin instance running on the same host:
 
 ```
-$ npm install --dev
-$ API_BASE="http://localhost:9411" npm run start
+LoadModule proxy_module lib/httpd/modules/mod_proxy.so
+LoadModule proxy_http_module lib/httpd/modules/mod_proxy_http.so
+
+ProxyPass "/proxy/foo/myzipkin"  "http://localhost:9411/zipkin/"
+ProxyPassReverse "/proxy/foo/myzipkin"  "http://localhost:9411/zipkin/"
 ```
 
-## URL to view development build
-```
-http://localhost:9000/zipkin
-```
-
-## Production build
+For the reverse proxy configuration to work, Zipkin needs to be started with the `zipkin.ui.basepath`
+parameter pointing to the proxy path:
 
 ```
-$ npm run build
+java -jar zipkin.jar --zipkin.ui.basepath=/proxy/foo/myzipkin
 ```
 
 ## Authentication / Authorization
@@ -36,9 +102,9 @@ Zipkin Lens design includes facets of old and new designs. Here are
 some notable new aspects borrowed or adapted from others.
 
 ### Overall Design
-Zipkin Lens was originally an internal Ui to LINE called IMON. One driving feature was to
+Zipkin Lens was originally an internal UI at LINE called IMON. One driving feature was to
 allow site-specific tags like "Phase" and "Instance Id" to be choices for trace queries.
-The Ui was originally matching color schemes of other tools like Grafana and fit in with
+The UI was originally matching color schemes of other tools like Grafana and fit in with
 the Observability ecosystem of LINE engineering. IMON was created by Igarashi Takuma and
 Huy Do who later contributed it as the initial version of Zipkin Lens.
 

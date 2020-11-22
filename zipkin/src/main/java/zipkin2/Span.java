@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -29,10 +29,11 @@ import java.util.logging.Logger;
 import zipkin2.codec.SpanBytesDecoder;
 import zipkin2.codec.SpanBytesEncoder;
 import zipkin2.internal.Nullable;
+import zipkin2.internal.RecyclableBuffers;
 
 import static java.lang.String.format;
 import static java.util.logging.Level.FINEST;
-import static zipkin2.Endpoint.HEX_DIGITS;
+import static zipkin2.internal.HexCodec.HEX_DIGITS;
 
 /**
  * A span is a single-host view of an operation. A trace is a series of spans (often RPC calls)
@@ -340,11 +341,11 @@ public final class Span implements Serializable { // for Spark and Flink jobs
       localEndpoint = source.localEndpoint;
       remoteEndpoint = source.remoteEndpoint;
       if (!source.annotations.isEmpty()) {
-        annotations = new ArrayList<>(source.annotations.size());
+        annotations = new ArrayList<Annotation>(source.annotations.size());
         annotations.addAll(source.annotations);
       }
       if (!source.tags.isEmpty()) {
-        tags = new TreeMap<>();
+        tags = new TreeMap<String, String>();
         tags.putAll(source.tags);
       }
       flags = source.flags;
@@ -374,12 +375,12 @@ public final class Span implements Serializable { // for Spark and Flink jobs
       }
       if (!source.annotations.isEmpty()) {
         if (annotations == null) {
-          annotations = new ArrayList<>(source.annotations.size());
+          annotations = new ArrayList<Annotation>(source.annotations.size());
         }
         annotations.addAll(source.annotations);
       }
       if (!source.tags.isEmpty()) {
-        if (tags == null) tags = new TreeMap<>();
+        if (tags == null) tags = new TreeMap<String, String>();
         tags.putAll(source.tags);
       }
       flags = flags | source.flags;
@@ -395,8 +396,7 @@ public final class Span implements Serializable { // for Spark and Flink jobs
     }
 
     /**
-     * @throws IllegalArgumentException if not lower-hex format
-     * @see Span#id()
+     * Sets {@link Span#id()} or throws {@link IllegalArgumentException} if not lower-hex format.
      */
     public Builder traceId(String traceId) {
       this.traceId = normalizeTraceId(traceId);
@@ -412,31 +412,26 @@ public final class Span implements Serializable { // for Spark and Flink jobs
      */
     public Builder traceId(long high, long low) {
       if (high == 0L && low == 0L) throw new IllegalArgumentException("empty trace ID");
-      char[] result = new char[high != 0L ? 32 : 16];
+      char[] data = RecyclableBuffers.shortStringBuffer();
       int pos = 0;
       if (high != 0L) {
-        writeHexLong(result, pos, high);
+        writeHexLong(data, pos, high);
         pos += 16;
       }
-      writeHexLong(result, pos, low);
-      this.traceId = new String(result);
+      writeHexLong(data, pos, low);
+      this.traceId = new String(data, 0, high != 0L ? 32 : 16);
       return this;
     }
 
-    /**
-     * Encodes 64 bits from the input into a hex parent ID. Unsets the {@link Span#parentId()} if
-     * the input is 0.
-     *
-     * @see Span#parentId()
-     */
+    /** Hex encodes the input as the {@link Span#parentId()} or unsets if the input is zero. */
     public Builder parentId(long parentId) {
       this.parentId = parentId != 0L ? toLowerHex(parentId) : null;
       return this;
     }
 
     /**
-     * @throws IllegalArgumentException if not lower-hex format
-     * @see Span#parentId()
+     * Sets {@link Span#parentId()} or throws {@link IllegalArgumentException} if not lower-hex
+     * format.
      */
     public Builder parentId(@Nullable String parentId) {
       if (parentId == null) {
@@ -455,10 +450,8 @@ public final class Span implements Serializable { // for Spark and Flink jobs
     }
 
     /**
-     * Encodes 64 bits from the input into a hex span ID.
-     *
-     * @throws IllegalArgumentException if the input is zero
-     * @see Span#id()
+     * Hex encodes the input as the {@link Span#id()} or throws IllegalArgumentException if the
+     * input is zero.
      */
     public Builder id(long id) {
       if (id == 0L) throw new IllegalArgumentException("empty id");
@@ -466,10 +459,7 @@ public final class Span implements Serializable { // for Spark and Flink jobs
       return this;
     }
 
-    /**
-     * @throws IllegalArgumentException if not lower-hex format
-     * @see Span#id()
-     */
+    /** Sets {@link Span#id()} or throws {@link IllegalArgumentException} if not lower-hex format. */
     public Builder id(String id) {
       if (id == null) throw new NullPointerException("id == null");
       int length = id.length();
@@ -482,91 +472,91 @@ public final class Span implements Serializable { // for Spark and Flink jobs
       return this;
     }
 
-    /** @see Span#kind */
+    /** Sets {@link Span#kind} */
     public Builder kind(@Nullable Kind kind) {
       this.kind = kind;
       return this;
     }
 
-    /** @see Span#name */
+    /** Sets {@link Span#name} */
     public Builder name(@Nullable String name) {
       this.name = name == null || name.isEmpty() ? null : name.toLowerCase(Locale.ROOT);
       return this;
     }
 
-    /** @see Span#timestampAsLong() */
+    /** Sets {@link Span#timestampAsLong()} */
     public Builder timestamp(long timestamp) {
       if (timestamp < 0L) timestamp = 0L;
       this.timestamp = timestamp;
       return this;
     }
 
-    /** @see Span#timestamp() */
+    /** Sets {@link Span#timestamp()} */
     public Builder timestamp(@Nullable Long timestamp) {
       if (timestamp == null || timestamp < 0L) timestamp = 0L;
       this.timestamp = timestamp;
       return this;
     }
 
-    /** @see Span#durationAsLong() */
+    /** Sets {@link Span#durationAsLong()} */
     public Builder duration(long duration) {
       if (duration < 0L) duration = 0L;
       this.duration = duration;
       return this;
     }
 
-    /** @see Span#duration() */
+    /** Sets {@link Span#duration()} */
     public Builder duration(@Nullable Long duration) {
       if (duration == null || duration < 0L) duration = 0L;
       this.duration = duration;
       return this;
     }
 
-    /** @see Span#localEndpoint */
+    /** Sets {@link Span#localEndpoint} */
     public Builder localEndpoint(@Nullable Endpoint localEndpoint) {
       if (EMPTY_ENDPOINT.equals(localEndpoint)) localEndpoint = null;
       this.localEndpoint = localEndpoint;
       return this;
     }
 
-    /** @see Span#remoteEndpoint */
+    /** Sets {@link Span#remoteEndpoint} */
     public Builder remoteEndpoint(@Nullable Endpoint remoteEndpoint) {
       if (EMPTY_ENDPOINT.equals(remoteEndpoint)) remoteEndpoint = null;
       this.remoteEndpoint = remoteEndpoint;
       return this;
     }
 
-    /** @see Span#annotations */
+    /** Sets {@link Span#annotations} */
     public Builder addAnnotation(long timestamp, String value) {
-      if (annotations == null) annotations = new ArrayList<>(2);
+      if (annotations == null) annotations = new ArrayList<Annotation>(2);
       annotations.add(Annotation.create(timestamp, value));
       return this;
     }
 
-    /** @see Span#annotations */
+    /** Sets {@link Span#annotations} */
     public Builder clearAnnotations() {
       if (annotations == null) return this;
       annotations.clear();
       return this;
     }
 
-    /** @see Span#tags */
+    /** Sets {@link Span#tags} */
     public Builder putTag(String key, String value) {
-      if (tags == null) tags = new TreeMap<>();
+      if (tags == null) tags = new TreeMap<String, String>();
       if (key == null) throw new NullPointerException("key == null");
       if (value == null) throw new NullPointerException("value of " + key + " == null");
       this.tags.put(key, value);
       return this;
     }
 
-    /** @see Span#tags */
+    /** Sets {@link Span#tags} */
     public Builder clearTags() {
       if (tags == null) return this;
       tags.clear();
       return this;
     }
 
-    /** @see Span#debug */
+    /** Sets {@link Span#debug} */
     public Builder debug(boolean debug) {
       flags |= FLAG_DEBUG_SET;
       if (debug) {
@@ -577,14 +567,14 @@ public final class Span implements Serializable { // for Spark and Flink jobs
       return this;
     }
 
-    /** @see Span#debug */
+    /** Sets {@link Span#debug} */
     public Builder debug(@Nullable Boolean debug) {
       if (debug != null) return debug((boolean) debug);
       flags &= ~(FLAG_DEBUG_SET | FLAG_DEBUG);
       return this;
     }
 
-    /** @see Span#shared */
+    /** Sets {@link Span#shared} */
     public Builder shared(boolean shared) {
       flags |= FLAG_SHARED_SET;
       if (shared) {
@@ -595,7 +585,7 @@ public final class Span implements Serializable { // for Spark and Flink jobs
       return this;
     }
 
-    /** @see Span#shared */
+    /** Sets {@link Span#shared} */
     public Builder shared(@Nullable Boolean shared) {
       if (shared != null) return shared((boolean) shared);
       flags &= ~(FLAG_SHARED_SET | FLAG_SHARED);
@@ -645,6 +635,7 @@ public final class Span implements Serializable { // for Spark and Flink jobs
     if (length > 32) throw new IllegalArgumentException("traceId.length > 32");
     int zeros = validateHexAndReturnZeroPrefix(traceId);
     if (zeros == length) throw new IllegalArgumentException("traceId is all zeros");
+    if (length == 15) throw new RuntimeException("WTF");
     if (length == 32 || length == 16) {
       if (length == 32 && zeros >= 16) return traceId.substring(16);
       return traceId;
@@ -655,19 +646,28 @@ public final class Span implements Serializable { // for Spark and Flink jobs
     }
   }
 
-  static String padLeft(String id, int desiredLength) {
-    StringBuilder builder = new StringBuilder(desiredLength);
-    int offset = desiredLength - id.length();
+  static final String THIRTY_TWO_ZEROS;
+  static {
+    char[] zeros = new char[32];
+    Arrays.fill(zeros, '0');
+    THIRTY_TWO_ZEROS = new String(zeros);
+  }
 
-    for (int i = 0; i < offset; i++) builder.append('0');
-    builder.append(id);
-    return builder.toString();
+  static String padLeft(String id, int desiredLength) {
+    int length = id.length();
+    int numZeros = desiredLength - length;
+
+    char[] data = RecyclableBuffers.shortStringBuffer();
+    THIRTY_TWO_ZEROS.getChars(0, numZeros, data, 0);
+    id.getChars(0, length, data, numZeros);
+
+    return new String(data, 0, desiredLength);
   }
 
   static String toLowerHex(long v) {
-    char[] data = new char[16];
+    char[] data = RecyclableBuffers.shortStringBuffer();
     writeHexLong(data, 0, v);
-    return new String(data);
+    return new String(data, 0, 16);
   }
 
   /** Inspired by {@code okio.Buffer.writeLong} */
@@ -746,7 +746,9 @@ public final class Span implements Serializable { // for Spark and Flink jobs
     localEndpoint = builder.localEndpoint;
     remoteEndpoint = builder.remoteEndpoint;
     annotations = sortedList(builder.annotations);
-    tags = builder.tags == null ? Collections.emptyMap() : new LinkedHashMap<>(builder.tags);
+    tags = builder.tags == null
+      ? Collections.<String, String>emptyMap()
+      : new LinkedHashMap<String, String>(builder.tags);
     flags = builder.flags;
   }
 

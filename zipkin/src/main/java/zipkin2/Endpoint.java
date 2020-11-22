@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -22,6 +22,9 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.Locale;
 import zipkin2.internal.Nullable;
+import zipkin2.internal.RecyclableBuffers;
+
+import static zipkin2.internal.HexCodec.HEX_DIGITS;
 
 /** The network context of a node in the service graph. */
 //@Immutable
@@ -128,7 +131,7 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
       return this;
     }
 
-    /** @see Endpoint#serviceName */
+    /** Sets {@link Endpoint#serviceName} */
     public Builder serviceName(@Nullable String serviceName) {
       this.serviceName = serviceName == null || serviceName.isEmpty()
         ? null : serviceName.toLowerCase(Locale.ROOT);
@@ -174,18 +177,13 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
     /**
      * Like {@link #parseIp(String)} except this accepts a byte array.
      *
-     * @param ipBytes byte array whose ownership is exclusively transfered to this endpoint.
+     * @param ipBytes byte array whose ownership is exclusively transferred to this endpoint.
      */
     public final boolean parseIp(byte[] ipBytes) {
       if (ipBytes == null) return false;
       if (ipBytes.length == 4) {
         ipv4Bytes = ipBytes;
-        ipv4 = String.valueOf(
-          ipBytes[0] & 0xff) + '.'
-          + (ipBytes[1] & 0xff) + '.'
-          + (ipBytes[2] & 0xff) + '.'
-          + (ipBytes[3] & 0xff
-        );
+        ipv4 = writeIpV4(ipBytes);
       } else if (ipBytes.length == 16) {
         if (!parseEmbeddedIPv4(ipBytes)) {
           ipv6 = writeIpV6(ipBytes);
@@ -195,6 +193,33 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
         return false;
       }
       return true;
+    }
+
+    static String writeIpV4(byte[] ipBytes) {
+      char[] buf = RecyclableBuffers.shortStringBuffer();
+      int pos = 0;
+      pos = writeBackwards(ipBytes[0] & 0xff, pos, buf);
+      buf[pos++] = '.';
+      pos = writeBackwards(ipBytes[1] & 0xff, pos, buf);
+      buf[pos++] = '.';
+      pos = writeBackwards(ipBytes[2] & 0xff, pos, buf);
+      buf[pos++] = '.';
+      pos = writeBackwards(ipBytes[3] & 0xff, pos, buf);
+      return new String(buf, 0, pos);
+    }
+
+    static int writeBackwards(int b, int pos, char[] buf) {
+      if (b < 10) {
+        buf[pos] = HEX_DIGITS[b];
+        return pos + 1;
+      }
+      int i = pos += b < 100 ? 2 : 3; // We write backwards from right to left.
+      while (b != 0) {
+        int digit = b % 10;
+        buf[--i] = HEX_DIGITS[digit];
+        b /= 10;
+      }
+      return pos;
     }
 
     /** Chaining variant of {@link #parseIp(String)} */
@@ -251,7 +276,7 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
       return this;
     }
 
-    /** @see Endpoint#portAsInt() */
+    /** Sets {@link Endpoint#portAsInt()} */
     public Builder port(int port) {
       if (port > 0xffff) throw new IllegalArgumentException("invalid port " + port);
       if (port < 0) port = 0;
@@ -272,10 +297,10 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
       }
 
       int flag = (ipv6[10] & 0xff) << 8 | (ipv6[11] & 0xff);
-      if (flag != 0 && flag != -1) return false; // IPv4-Compatible or IPv4-Mapped
+      if (flag != 0) return false; // IPv4-Compatible or IPv4-Mapped
 
       byte o1 = ipv6[12], o2 = ipv6[13], o3 = ipv6[14], o4 = ipv6[15];
-      if (flag == 0 && o1 == 0 && o2 == 0 && o3 == 0 && o4 == 1) {
+      if (o1 == 0 && o2 == 0 && o3 == 0 && o4 == 1) {
         return false; // ::1 is localhost, not an embedded compat address
       }
 
@@ -337,19 +362,13 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
     return IpFamily.Unknown;
   }
 
-  private static boolean notHex(char c) {
+  static boolean notHex(char c) {
     return (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F');
   }
 
-  private static final ThreadLocal<char[]> IPV6_TO_STRING = new ThreadLocal<char[]>() {
-    @Override protected char[] initialValue() {
-      return new char[39]; // maximum length of encoded ipv6
-    }
-  };
-
   static String writeIpV6(byte[] ipv6) {
     int pos = 0;
-    char[] buf = IPV6_TO_STRING.get();
+    char[] buf = RecyclableBuffers.shortStringBuffer();
 
     // Compress the longest string of zeros
     int zeroCompressionIndex = -1;
@@ -407,14 +426,11 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
     return new String(buf, 0, pos);
   }
 
-  static final char[] HEX_DIGITS =
-    {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
-
   // Begin code from com.google.common.net.InetAddresses 23
-  private static final int IPV6_PART_COUNT = 8;
+  static final int IPV6_PART_COUNT = 8;
 
   @Nullable
-  private static byte[] textToNumericFormatV6(String ipString) {
+  static byte[] textToNumericFormatV6(String ipString) {
     // An address can have [2..8] colons, and N colons make N+1 parts.
     String[] parts = ipString.split(":", IPV6_PART_COUNT + 2);
     if (parts.length < 3 || parts.length > IPV6_PART_COUNT + 1) {
@@ -477,7 +493,7 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
     return rawBytes.array();
   }
 
-  private static short parseHextet(String ipPart) {
+  static short parseHextet(String ipPart) {
     // Note: we already verified that this string contains only hex digits.
     int hextet = Integer.parseInt(ipPart, 16);
     if (hextet > 0xffff) {
@@ -488,7 +504,7 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
   // End code from com.google.common.net.InetAddresses 23
 
   // Begin code from io.netty.util.NetUtil 4.1
-  private static boolean isValidIpV4Address(String ip, int from, int toExcluded) {
+  static boolean isValidIpV4Address(String ip, int from, int toExcluded) {
     int len = toExcluded - from;
     int i;
     return len <= 15 && len >= 7 &&
@@ -498,7 +514,7 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
       isValidIpV4Word(ip, i + 1, toExcluded);
   }
 
-  private static boolean isValidIpV4Word(CharSequence word, int from, int toExclusive) {
+  static boolean isValidIpV4Word(CharSequence word, int from, int toExclusive) {
     int len = toExclusive - from;
     char c0, c1, c2;
     if (len < 1 || len > 3 || (c0 = word.charAt(from)) < '0') {
@@ -513,7 +529,7 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
     return c0 <= '9' && (len == 1 || isValidNumericChar(word.charAt(from + 1)));
   }
 
-  private static boolean isValidNumericChar(char c) {
+  static boolean isValidNumericChar(char c) {
     return c >= '0' && c <= '9';
   }
   // End code from io.netty.util.NetUtil 4.1
@@ -581,7 +597,7 @@ public final class Endpoint implements Serializable { // for Spark and Flink job
   }
 
   // TODO: replace this with native proto3 encoding
-  private static final class SerializedForm implements Serializable {
+  static final class SerializedForm implements Serializable {
     static final long serialVersionUID = 0L;
 
     final String serviceName, ipv4, ipv6;

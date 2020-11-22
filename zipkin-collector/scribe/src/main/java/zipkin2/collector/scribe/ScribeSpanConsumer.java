@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,64 +13,63 @@
  */
 package zipkin2.collector.scribe;
 
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.SettableFuture;
+import com.linecorp.armeria.common.CommonPools;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.stream.Collectors;
+import org.apache.thrift.async.AsyncMethodCallback;
 import zipkin2.Callback;
 import zipkin2.Span;
 import zipkin2.codec.SpanBytesDecoder;
 import zipkin2.collector.Collector;
 import zipkin2.collector.CollectorMetrics;
-import zipkin2.internal.Nullable;
+import zipkin2.collector.scribe.generated.LogEntry;
+import zipkin2.collector.scribe.generated.ResultCode;
+import zipkin2.collector.scribe.generated.Scribe;
 
-final class ScribeSpanConsumer implements Scribe {
+final class ScribeSpanConsumer implements Scribe.AsyncIface {
   final Collector collector;
   final CollectorMetrics metrics;
   final String category;
 
-  ScribeSpanConsumer(ScribeCollector.Builder builder) {
-    this.collector = builder.delegate.build();
-    this.metrics = builder.metrics;
-    this.category = builder.category;
+  ScribeSpanConsumer(Collector collector, CollectorMetrics metrics, String category) {
+    this.collector = collector;
+    this.metrics = metrics;
+    this.category = category;
   }
 
   @Override
-  public ListenableFuture<ResultCode> log(List<LogEntry> messages) {
+  public void Log(List<LogEntry> messages, AsyncMethodCallback<ResultCode> resultHandler) {
     metrics.incrementMessages();
-    List<Span> spans;
+    List<Span> spans = new ArrayList<>();
+    int byteCount = 0;
     try {
-      spans =
-          messages
-              .stream()
-              .filter(m -> m.category.equals(category))
-              .map(m -> m.message.getBytes(StandardCharsets.ISO_8859_1))
-              .map(b -> Base64.getMimeDecoder().decode(b)) // finagle-zipkin uses mime encoding
-              .peek(b -> metrics.incrementBytes(b.length))
-              .map(SpanBytesDecoder.THRIFT::decodeOne)
-              .collect(Collectors.toList());
+      for (LogEntry logEntry : messages) {
+        if (!category.equals(logEntry.category)) continue;
+        byte[] bytes = logEntry.message.getBytes(StandardCharsets.ISO_8859_1);
+        bytes = Base64.getMimeDecoder().decode(bytes); // finagle-zipkin uses mime encoding
+        byteCount += bytes.length;
+        spans.add(SpanBytesDecoder.THRIFT.decodeOne(bytes));
+      }
     } catch (RuntimeException e) {
       metrics.incrementMessagesDropped();
-      return Futures.immediateFailedFuture(e);
+      resultHandler.onError(e);
+      return;
+    } finally {
+      metrics.incrementBytes(byteCount);
     }
 
-    SettableFuture<ResultCode> result = SettableFuture.create();
-    collector.accept(
-        spans,
-        new Callback<Void>() {
-          @Override
-          public void onSuccess(@Nullable Void value) {
-            result.set(ResultCode.OK);
-          }
+    collector.accept(spans, new Callback<Void>() {
+      @Override public void onSuccess(Void value) {
+        resultHandler.onComplete(ResultCode.OK);
+      }
 
-          @Override
-          public void onError(Throwable t) {
-            result.setException(t);
-          }
-        });
-    return result;
+      @Override public void onError(Throwable t) {
+        Exception error = t instanceof Exception ? (Exception) t : new RuntimeException(t);
+        resultHandler.onError(error);
+      }
+    // Collectors may not be asynchronous so switch to blocking executor here.
+    }, CommonPools.blockingTaskExecutor());
   }
 }

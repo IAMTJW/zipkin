@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright 2015-2019 The OpenZipkin Authors
+    Copyright 2015-2020 The OpenZipkin Authors
 
     Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
     in compliance with the License. You may obtain a copy of the License at
@@ -18,11 +18,12 @@
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <groupId>io.zipkin.zipkin2</groupId>
-    <artifactId>parent</artifactId>
-    <version>2.12.7-SNAPSHOT</version>
+    <groupId>io.zipkin</groupId>
+    <artifactId>zipkin-parent</artifactId>
+    <version>2.22.3-SNAPSHOT</version>
   </parent>
 
+  <groupId>io.zipkin.zipkin2</groupId>
   <artifactId>zipkin-collector-parent</artifactId>
   <name>Collector</name>
   <packaging>pom</packaging>
@@ -35,39 +36,43 @@
 
   <modules>
     <module>core</module>
+    <module>activemq</module>
     <module>kafka</module>
     <module>rabbitmq</module>
     <module>scribe</module>
-    <module>kafka08</module>
   </modules>
 
   <dependencies>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>zipkin</artifactId>
+      <version>${project.version}</version>
     </dependency>
 
+    <!-- Our json codec is shaded, but Intellij doesn't understand that when running tests. -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>${gson.version}</version>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
-      <artifactId>zipkin</artifactId>
+      <artifactId>zipkin-tests</artifactId>
       <version>${project.version}</version>
-      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
-
-  <build>
-    <plugins>
-      <!-- disable retrolambda as zipkin-server is language level 1.8 -->
-      <plugin>
-        <groupId>net.orfjackal.retrolambda</groupId>
-        <artifactId>retrolambda-maven-plugin</artifactId>
-        <executions>
-          <execution>
-            <phase>none</phase>
-          </execution>
-        </executions>
-      </plugin>
-    </plugins>
-  </build>
 </project>

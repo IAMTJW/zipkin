@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,43 +13,36 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Row;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
-import java.util.ArrayList;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import java.util.List;
-import java.util.function.BiConsumer;
-import java.util.function.Supplier;
+import java.util.Locale;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
-import zipkin2.storage.cassandra.internal.call.AccumulateAllResults;
+import zipkin2.storage.cassandra.internal.call.DistinctSortedStrings;
 import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static zipkin2.storage.cassandra.v1.Tables.SPAN_NAMES;
 
-final class SelectSpanNames extends ResultSetFutureCall {
-
-  static class Factory {
-    final Session session;
+final class SelectSpanNames extends ResultSetFutureCall<AsyncResultSet> {
+  static final class Factory {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
-    final AccumulateNamesAllResults accumulateNamesIntoSet = new AccumulateNamesAllResults();
 
-    Factory(Session session) {
+    Factory(CqlSession session) {
       this.session = session;
-      this.preparedStatement =
-          session.prepare(
-              QueryBuilder.select("span_name")
-                  .from(Tables.SPAN_NAMES)
-                  .where(QueryBuilder.eq("service_name", QueryBuilder.bindMarker("service_name")))
-                  .and(QueryBuilder.eq("bucket", 0))
-                  .limit(QueryBuilder.bindMarker("limit_")));
+      this.preparedStatement = session.prepare("SELECT span_name"
+        + " FROM " + SPAN_NAMES
+        + " WHERE service_name=?"
+        + " AND bucket=0"
+        + " LIMIT " + 10000);
     }
 
     Call<List<String>> create(String serviceName) {
       if (serviceName == null || serviceName.isEmpty()) return Call.emptyList();
-      String service = checkNotNull(serviceName, "serviceName").toLowerCase();
-      return new SelectSpanNames(this, service).flatMap(accumulateNamesIntoSet);
+      String service = serviceName.toLowerCase(Locale.ROOT); // service names are always lowercase!
+      return new SelectSpanNames(this, service).flatMap(DistinctSortedStrings.get());
     }
   }
 
@@ -61,40 +54,20 @@ final class SelectSpanNames extends ResultSetFutureCall {
     this.service_name = service_name;
   }
 
-  @Override
-  protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(
-        factory
-            .preparedStatement
-            .bind()
-            .setString("service_name", service_name)
-            .setInt("limit_", 1000)); // no one is ever going to browse so many span names
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(factory.preparedStatement.boundStatementBuilder()
+      .setString(0, service_name).build());
   }
 
-  @Override
-  public String toString() {
+  @Override public AsyncResultSet map(AsyncResultSet input) {
+    return input;
+  }
+
+  @Override public String toString() {
     return "SelectSpanNames{service_name=" + service_name + "}";
   }
 
-  @Override
-  public SelectSpanNames clone() {
+  @Override public SelectSpanNames clone() {
     return new SelectSpanNames(factory, service_name);
-  }
-
-  static class AccumulateNamesAllResults extends AccumulateAllResults<List<String>> {
-    @Override
-    protected Supplier<List<String>> supplier() {
-      return ArrayList::new; // TODO: list might not be ok due to not distinct
-    }
-
-    @Override
-    protected BiConsumer<Row, List<String>> accumulator() {
-      return (row, list) -> list.add(row.getString("span_name"));
-    }
-
-    @Override
-    public String toString() {
-      return "AccumulateNamesAllResults{}";
-    }
   }
 }

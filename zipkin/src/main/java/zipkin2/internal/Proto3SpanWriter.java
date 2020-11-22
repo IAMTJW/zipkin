@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -20,7 +20,7 @@ import static zipkin2.internal.Proto3Fields.sizeOfLengthDelimitedField;
 import static zipkin2.internal.Proto3ZipkinFields.SPAN;
 
 //@Immutable
-final class Proto3SpanWriter implements Buffer.Writer<Span> {
+final class Proto3SpanWriter implements WriteBuffer.Writer<Span> {
 
   static final byte[] EMPTY_ARRAY = new byte[0];
 
@@ -28,7 +28,7 @@ final class Proto3SpanWriter implements Buffer.Writer<Span> {
     return SPAN.sizeInBytes(span);
   }
 
-  @Override public void write(Span value, Buffer b) {
+  @Override public void write(Span value, WriteBuffer b) {
     SPAN.write(b, value);
   }
 
@@ -48,22 +48,23 @@ final class Proto3SpanWriter implements Buffer.Writer<Span> {
       int sizeOfValue = sizeOfValues[i] = SPAN.sizeOfValue(spans.get(i));
       sizeInBytes += sizeOfLengthDelimitedField(sizeOfValue);
     }
-    Buffer result = new Buffer(sizeInBytes);
+    byte[] result = new byte[sizeInBytes];
+    WriteBuffer writeBuffer = WriteBuffer.wrap(result);
     for (int i = 0; i < lengthOfSpans; i++) {
-      writeSpan(spans.get(i), sizeOfValues[i], result);
+      writeSpan(spans.get(i), sizeOfValues[i], writeBuffer);
     }
-    return result.toByteArray();
+    return result;
   }
 
   byte[] write(Span onlySpan) {
     int sizeOfValue = SPAN.sizeOfValue(onlySpan);
-    Buffer result = new Buffer(sizeOfLengthDelimitedField(sizeOfValue));
-    writeSpan(onlySpan, sizeOfValue, result);
-    return result.toByteArray();
+    byte[] result = new byte[sizeOfLengthDelimitedField(sizeOfValue)];
+    writeSpan(onlySpan, sizeOfValue, WriteBuffer.wrap(result));
+    return result;
   }
 
   // prevents resizing twice
-  void writeSpan(Span span, int sizeOfSpan, Buffer result) {
+  void writeSpan(Span span, int sizeOfSpan, WriteBuffer result) {
     result.writeByte(SPAN.key);
     result.writeVarint(sizeOfSpan); // length prefix
     SPAN.writeValue(result, span);
@@ -73,10 +74,10 @@ final class Proto3SpanWriter implements Buffer.Writer<Span> {
     int lengthOfSpans = spans.size();
     if (lengthOfSpans == 0) return 0;
 
-    Buffer result = new Buffer(out, pos);
+    WriteBuffer result = WriteBuffer.wrap(out, pos);
     for (int i = 0; i < lengthOfSpans; i++) {
       SPAN.write(result, spans.get(i));
     }
-    return result.pos - pos;
+    return result.pos() - pos;
   }
 }

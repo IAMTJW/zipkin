@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,29 +13,46 @@
  */
 package zipkin2.elasticsearch;
 
+import com.fasterxml.jackson.core.JsonGenerator;
+import io.netty.buffer.ByteBufOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
 import zipkin2.DependencyLink;
-import zipkin2.codec.DependencyLinkBytesEncoder;
-import zipkin2.elasticsearch.internal.HttpBulkIndexer;
+import zipkin2.elasticsearch.internal.BulkCallBuilder;
+import zipkin2.elasticsearch.internal.BulkIndexWriter;
+import zipkin2.elasticsearch.internal.JsonSerializers;
 
 /** Package accessor for integration tests */
 public class InternalForTests {
   public static void writeDependencyLinks(ElasticsearchStorage es, List<DependencyLink> links,
     long midnightUTC) {
-    String index =
-      es.indexNameFormatter().formatTypeAndTimestamp("dependency", midnightUTC);
-    HttpBulkIndexer indexer = new HttpBulkIndexer("indexlinks", es);
-    for (DependencyLink link : links) {
-      byte[] document = DependencyLinkBytesEncoder.JSON_V1.encode(link);
-      indexer.add(index, "dependency", document,
-        link.parent() + "|" + link.child()); // Unique constraint
-    }
+    String index = ((ElasticsearchSpanConsumer) es.spanConsumer())
+      .formatTypeAndTimestampForInsert("dependency", midnightUTC);
+    BulkCallBuilder indexer = new BulkCallBuilder(es, es.version(), "indexlinks");
+    for (DependencyLink link : links)
+      indexer.index(index, "dependency", link, DEPENDENCY_LINK_WRITER);
     try {
-      indexer.newCall().execute();
+      indexer.build().execute();
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
   }
+
+  static final BulkIndexWriter<DependencyLink> DEPENDENCY_LINK_WRITER =
+    new BulkIndexWriter<DependencyLink>() {
+      @Override public String writeDocument(DependencyLink link, ByteBufOutputStream sink) {
+        try (JsonGenerator writer = JsonSerializers.jsonGenerator(sink)) {
+          writer.writeStartObject();
+          writer.writeStringField("parent", link.parent());
+          writer.writeStringField("child", link.child());
+          writer.writeNumberField("callCount", link.callCount());
+          if (link.errorCount() > 0) writer.writeNumberField("errorCount", link.errorCount());
+          writer.writeEndObject();
+        } catch (IOException e) {
+          throw new AssertionError(e); // No I/O writing to a Buffer.
+        }
+        return link.parent() + "|" + link.child();
+      }
+    };
 }

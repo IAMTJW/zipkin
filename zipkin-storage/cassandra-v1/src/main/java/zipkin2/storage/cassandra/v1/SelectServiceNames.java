@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,35 +13,30 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Row;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
-import java.util.ArrayList;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import java.util.List;
-import java.util.function.BiConsumer;
-import java.util.function.Supplier;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
-import zipkin2.storage.cassandra.internal.call.AccumulateAllResults;
+import zipkin2.storage.cassandra.internal.call.DistinctSortedStrings;
 import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 
-final class SelectServiceNames extends ResultSetFutureCall {
-  static class Factory {
-    final Session session;
-    final PreparedStatement preparedStatement;
-    final AccumulateServicesAllResults accumulateServicesIntoSet =
-        new AccumulateServicesAllResults();
+import static zipkin2.storage.cassandra.v1.Tables.SERVICE_NAMES;
 
-    Factory(Session session) {
+final class SelectServiceNames extends ResultSetFutureCall<AsyncResultSet> {
+  static final class Factory {
+    final CqlSession session;
+    final PreparedStatement preparedStatement;
+
+    Factory(CqlSession session) {
       this.session = session;
       this.preparedStatement =
-          session.prepare(
-              QueryBuilder.select("service_name").distinct().from(Tables.SERVICE_NAMES));
+        session.prepare("SELECT DISTINCT service_name FROM " + SERVICE_NAMES);
     }
 
     Call<List<String>> create() {
-      return new SelectServiceNames(this).flatMap(accumulateServicesIntoSet);
+      return new SelectServiceNames(this).flatMap(DistinctSortedStrings.get());
     }
   }
 
@@ -51,35 +46,19 @@ final class SelectServiceNames extends ResultSetFutureCall {
     this.factory = factory;
   }
 
-  @Override
-  protected ResultSetFuture newFuture() {
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
     return factory.session.executeAsync(factory.preparedStatement.bind());
   }
 
-  @Override
-  public String toString() {
+  @Override public AsyncResultSet map(AsyncResultSet input) {
+    return input;
+  }
+
+  @Override public String toString() {
     return "SelectServiceNames{}";
   }
 
-  @Override
-  public SelectServiceNames clone() {
+  @Override public SelectServiceNames clone() {
     return new SelectServiceNames(factory);
-  }
-
-  static class AccumulateServicesAllResults extends AccumulateAllResults<List<String>> {
-    @Override
-    protected Supplier<List<String>> supplier() {
-      return ArrayList::new; // list is ok because it is distinct results
-    }
-
-    @Override
-    protected BiConsumer<Row, List<String>> accumulator() {
-      return (row, list) -> list.add(row.getString("service_name"));
-    }
-
-    @Override
-    public String toString() {
-      return "AccumulateServicesAllResults{}";
-    }
   }
 }

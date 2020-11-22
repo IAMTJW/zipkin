@@ -1,9 +1,18 @@
-import {
-  clean,
-  cleanupComparator,
-  merge,
-  mergeV2ById,
-} from './span-cleaner';
+/*
+ * Copyright 2015-2020 The OpenZipkin Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
+import { clean, cleanupComparator, merge, mergeV2ById } from './span-cleaner';
+import yelpTrace from '../../testdata/yelp.json';
 
 // endpoints from zipkin2.TestObjects
 const frontend = {
@@ -50,7 +59,8 @@ const serverSpan = {
   shared: true,
 };
 
-const oneOfEach = { // has every field set
+const oneOfEach = {
+  // has every field set
   traceId: '7180c278b62e8f6a216a2aea45d08fc9',
   parentId: '0000000000000001',
   id: '0000000000000002',
@@ -364,14 +374,13 @@ describe('mergeV2ById', () => {
     const rightFirst = mergeV2ById([right, left]);
 
     [leftFirst, rightFirst].forEach((spans) => {
-      spans.forEach(span => expect(span.traceId).toEqual(left.traceId));
+      spans.forEach((span) => expect(span.traceId).toEqual(left.traceId));
     });
   });
 
   /*
-   * Some don't propagate the server's parent ID which creates a race condition. Try to unwind it.
-   *
-   * See https://github.com/openzipkin/zipkin/pull/1745
+   * This test shows that if a parent ID is stored late (ex because it wasn't propagated), it can be
+   * backfilled during cleanup.
    */
   it('should backfill missing parent id on shared span', () => {
     const spans = mergeV2ById([
@@ -824,9 +833,7 @@ describe('mergeV2ById', () => {
         id: '0000000000000002',
         duration: 207000,
         remoteEndpoint: backend,
-        annotations: [
-          { timestamp: 1472470996403000, value: 'wr' },
-        ],
+        annotations: [{ timestamp: 1472470996403000, value: 'wr' }],
       },
       {
         traceId: '0000000000000001',
@@ -835,9 +842,7 @@ describe('mergeV2ById', () => {
         kind: 'CLIENT',
         timestamp: 1472470996199000,
         localEndpoint: frontend,
-        annotations: [
-          { timestamp: 1472470996238000, value: 'ws' },
-        ],
+        annotations: [{ timestamp: 1472470996238000, value: 'ws' }],
         tags: {
           'http.path': '/api',
           'clnt/finagle.version': '6.45.0',
@@ -919,7 +924,7 @@ describe('mergeV2ById', () => {
       },
     ]);
 
-    expect(spans.map(s => `${s.id}-${!!s.shared}-${s.timestamp}`)).toEqual([
+    expect(spans.map((s) => `${s.id}-${!!s.shared}-${s.timestamp}`)).toEqual([
       '0000000000000004-false-2', // unshared is first even if later!
       '0000000000000004-true-1',
       '0000000000000003-false-2',
@@ -951,7 +956,7 @@ describe('mergeV2ById', () => {
       },
     ]);
 
-    expect(spans.map(s => s.id)).toEqual([
+    expect(spans.map((s) => s.id)).toEqual([
       '0000000000000001',
       '0000000000000002',
       '0000000000000003',
@@ -976,10 +981,38 @@ describe('mergeV2ById', () => {
       },
     ]);
 
-    expect(spans.map(s => s.name)).toEqual([
-      'client',
-      'server',
+    expect(spans.map((s) => s.name)).toEqual(['client', 'server']);
+  });
+
+  // If instrumentation accidentally added shared flag on a server root span, delete it so that
+  // downstream code can process the tree properly
+  it('should delete accidental shared flag', () => {
+    const spans = mergeV2ById(yelpTrace);
+
+    expect(spans.length).toEqual(yelpTrace.length);
+    expect(spans[0].parentId).toBeUndefined();
+    expect(spans[0].shared).toBeUndefined();
+  });
+
+  it('should not delete valid shared flag on root span', () => {
+    const spans = mergeV2ById([
+      {
+        traceId: '1111111111111111',
+        id: '0000000000000001',
+        kind: 'SERVER',
+        timestamp: 2,
+        shared: true,
+      },
+      {
+        traceId: '1111111111111111',
+        id: '0000000000000001',
+        kind: 'CLIENT',
+        timestamp: 1,
+      },
     ]);
+
+    expect(spans.length).toEqual(2);
+    expect(spans[1].shared).toEqual(true);
   });
 });
 
@@ -1003,8 +1036,8 @@ describe('cleanupComparator', () => {
       },
     ];
 
-    expect(spans.sort(cleanupComparator).map(s => `${s.id}-${s.kind}`)).toEqual([
-      '0000000000000004-CLIENT', '0000000000000004-SERVER',
-    ]);
+    expect(
+      spans.sort(cleanupComparator).map((s) => `${s.id}-${s.kind}`),
+    ).toEqual(['0000000000000004-CLIENT', '0000000000000004-SERVER']);
   });
 });

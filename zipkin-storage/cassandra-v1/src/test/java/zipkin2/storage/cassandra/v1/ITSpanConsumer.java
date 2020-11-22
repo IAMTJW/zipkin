@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,124 +13,74 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import java.io.IOException;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import zipkin2.Span;
-import zipkin2.TestObjects;
-import zipkin2.storage.SpanConsumer;
+import zipkin2.storage.ITStorage;
+import zipkin2.storage.StorageComponent;
 
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
+import static zipkin2.TestObjects.newClientSpan;
+import static zipkin2.storage.cassandra.v1.CassandraStorageExtension.rowCount;
 
-abstract class ITSpanConsumer {
-  protected abstract String keyspace();
-
-  private CassandraStorage storage;
-
-  @Before
-  public void connect() {
-    storage = storageBuilder().autocompleteKeys(asList("environment")).keyspace(keyspace()).build();
+abstract class ITSpanConsumer extends ITStorage<CassandraStorage> {
+  @Override protected void configureStorageForTest(StorageComponent.Builder storage) {
+    storage.autocompleteKeys(asList("environment"));
   }
-
-  abstract CassandraStorage.Builder storageBuilder();
 
   /**
    * Core/Boundary annotations like "sr" aren't queryable, and don't add value to users. Address
    * annotations, like "sa", don't have string values, so are similarly not queryable. Skipping
    * indexing of such annotations dramatically reduces the load on cassandra and size of indexes.
    */
-  @Test public void doesntIndexCoreOrNonStringAnnotations() throws IOException {
-    accept(storage.spanConsumer(), TestObjects.CLIENT_SPAN);
+  @Test public void doesntIndexCoreOrNonStringAnnotations(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix).toBuilder().putTag("environment", "test").build();
 
-    assertThat(
-      storage.session()
-        .execute("SELECT blobastext(annotation) from annotations_index")
-        .all())
+    accept(clientSpan);
+
+    assertThat(storage.session().execute("SELECT blobastext(annotation) from annotations_index")
+      .all())
       .extracting(r -> r.getString(0))
       .containsExactlyInAnyOrder(
-        "frontend:http.path",
-        "frontend:http.path:/api",
-        "frontend:clnt/finagle.version:6.45.0",
-        "frontend:foo",
-        "frontend:clnt/finagle.version");
+        clientSpan.localServiceName() + ":http.method:GET",
+        clientSpan.localServiceName() + ":http.path",
+        clientSpan.localServiceName() + ":http.method",
+        clientSpan.localServiceName() + ":environment:test",
+        clientSpan.localServiceName() + ":http.path:/foo",
+        clientSpan.localServiceName() + ":environment");
   }
 
-  /**
-   * Simulates a trace with a step pattern, where each span starts a millisecond after the prior
-   * one. The consumer code optimizes index inserts to only represent the interval represented by
-   * the trace as opposed to each individual timestamp.
-   */
-  @Test public void skipsRedundantIndexingInATrace() throws IOException {
-    Span[] trace = new Span[101];
-    trace[0] = TestObjects.CLIENT_SPAN;
+  @Test public void addsAutocompleteTag(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span[] trace = new Span[2];
+    trace[0] = newClientSpan(testSuffix);
 
-    for (int i = 0; i < 100; i++) {
-      trace[i + 1] =
-        Span.newBuilder()
-          .traceId(trace[0].traceId())
-          .parentId(trace[0].id())
-          .id(i + 1)
-          .name(String.valueOf(i + 1))
-          .timestamp(trace[0].timestamp() + i * 1000) // child span timestamps happen 1 ms later
-          .addAnnotation(trace[0].annotations().get(0).timestamp() + i * 1000, "bar")
-          .build();
-    }
+    trace[1] = Span.newBuilder()
+      .traceId(trace[0].traceId())
+      .parentId(trace[0].id())
+      .id(1)
+      .name("1")
+      .putTag("environment", "dev")
+      .putTag("a", "b")
+      .localEndpoint(trace[0].localEndpoint())
+      .timestamp(trace[0].timestampAsLong() + 1000L) // child span timestamps happen 1ms later
+      .addAnnotation(trace[0].timestampAsLong() + 1500L, "bar")
+      .build();
+    accept(trace);
 
-    accept(storage.spanConsumer(), trace);
-    assertThat(rowCount("annotations_index")).isEqualTo(5L);
-    assertThat(rowCount("service_span_name_index")).isEqualTo(2L);
-    assertThat(rowCount("service_name_index")).isEqualTo(2L);
+    assertThat(rowCount(storage, Tables.AUTOCOMPLETE_TAGS))
+      .isGreaterThanOrEqualTo(1L);
 
-    // redundant store doesn't change the indexes
-    accept(storage.spanConsumer(), trace);
-    assertThat(rowCount("annotations_index")).isEqualTo(5L);
-    assertThat(rowCount("service_span_name_index")).isEqualTo(2L);
-    assertThat(rowCount("service_name_index")).isEqualTo(2L);
-  }
-
-  void accept(SpanConsumer consumer, Span... spans) throws IOException {
-    consumer.accept(asList(spans)).execute();
-    // Now, block until writes complete, notably so we can read them.
-    ITCassandraStorage.blockWhileInFlight(storage);
-  }
-
-  long rowCount(String table) {
-    return storage.session()
-      .execute("SELECT COUNT(*) from " + table)
-      .one()
-      .getLong(0);
+    assertThat(getTagValue(storage, "environment")).isEqualTo("dev");
   }
 
   static String getTagValue(CassandraStorage storage, String key) {
     return storage
       .session()
-      .execute("SELECT value from " + Tables.TABLE_AUTOCOMPLETE_TAGS + " WHERE key='environment'")
+      .execute("SELECT value from " + Tables.AUTOCOMPLETE_TAGS + " WHERE key='" + key + "'")
       .one()
       .getString(0);
-  }
-
-  @Test
-  public void insertTags_SelectTags_CalculateCount() throws IOException {
-    Span[] trace = new Span[2];
-    trace[0] = TestObjects.CLIENT_SPAN;
-
-    trace[1] =
-      Span.newBuilder()
-        .traceId(trace[0].traceId())
-        .parentId(trace[0].id())
-        .id(1)
-        .name("1")
-        .putTag("environment", "dev")
-        .putTag("a", "b")
-        .timestamp(trace[0].timestamp() * 1000) // child span timestamps happen 1 ms later
-        .addAnnotation(trace[0].annotations().get(0).timestamp() + 1000, "bar")
-        .build();
-    accept(storage.spanConsumer(), trace);
-
-    assertThat(rowCount(Tables.TABLE_AUTOCOMPLETE_TAGS))
-      .isGreaterThanOrEqualTo(1L);
-
-    assertThat(getTagValue(storage, "environment")).isEqualTo("dev");
   }
 }

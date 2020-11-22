@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,40 +13,32 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Row;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
-import java.util.ArrayList;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import java.util.List;
-import java.util.function.BiConsumer;
-import java.util.function.Supplier;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
-import zipkin2.storage.cassandra.internal.call.AccumulateAllResults;
+import zipkin2.storage.cassandra.internal.call.DistinctSortedStrings;
 import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 
-import static zipkin2.storage.cassandra.v1.Tables.TABLE_AUTOCOMPLETE_TAGS;
+import static zipkin2.storage.cassandra.v1.Tables.AUTOCOMPLETE_TAGS;
 
-final class SelectAutocompleteValues extends ResultSetFutureCall {
-  static class Factory {
-    final Session session;
+final class SelectAutocompleteValues extends ResultSetFutureCall<AsyncResultSet> {
+  static final class Factory {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
-    final AccumulateAutocompleteValues accumulateAutocompleteValues;
 
-    Factory(Session session) {
+    Factory(CqlSession session) {
       this.session = session;
-      this.preparedStatement = session.prepare(
-        QueryBuilder.select("value")
-          .from(TABLE_AUTOCOMPLETE_TAGS)
-          .where(QueryBuilder.eq("key", QueryBuilder.bindMarker("key")))
-          .limit(QueryBuilder.bindMarker("limit_")));
-      this.accumulateAutocompleteValues = new AccumulateAutocompleteValues();
+      this.preparedStatement = session.prepare("SELECT value"
+        + " FROM " + AUTOCOMPLETE_TAGS
+        + " WHERE key=?"
+        + " LIMIT " + 10000);
     }
 
     Call<List<String>> create(String key) {
-      return new SelectAutocompleteValues(this, key).flatMap(accumulateAutocompleteValues);
+      return new SelectAutocompleteValues(this, key).flatMap(DistinctSortedStrings.get());
     }
   }
 
@@ -58,32 +50,16 @@ final class SelectAutocompleteValues extends ResultSetFutureCall {
     this.key = key;
   }
 
-  @Override protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(factory.preparedStatement
-      .bind()
-      .setString("key", key)
-      .setInt("limit_", 1000)); // no one is ever going to browse so many tag values
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(factory.preparedStatement.boundStatementBuilder()
+      .setString(0, key).build());
   }
 
-  @Override public Call<ResultSet> clone() {
+  @Override public AsyncResultSet map(AsyncResultSet input) {
+    return input;
+  }
+
+  @Override public Call<AsyncResultSet> clone() {
     return new SelectAutocompleteValues(factory, key);
-  }
-
-  static class AccumulateAutocompleteValues extends AccumulateAllResults<List<String>> {
-    @Override protected Supplier<List<String>> supplier() {
-      return ArrayList::new; // list is ok because it is distinct results
-    }
-
-    @Override protected BiConsumer<Row, List<String>> accumulator() {
-      return (row, list) -> {
-        String result = row.getString("value");
-        if (!result.isEmpty()) list.add(result);
-      };
-    }
-
-    @Override
-    public String toString() {
-      return "AccumulateAutocompleteValues{}";
-    }
   }
 }

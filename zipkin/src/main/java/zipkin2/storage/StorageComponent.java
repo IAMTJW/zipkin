@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -14,10 +14,13 @@
 package zipkin2.storage;
 
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.logging.Logger;
 import zipkin2.Call;
+import zipkin2.Callback;
 import zipkin2.Component;
 import zipkin2.Span;
+import zipkin2.internal.TracesAdapter;
 
 /**
  * A component that provides storage interfaces used for spans and aggregations. Implementations are
@@ -26,6 +29,10 @@ import zipkin2.Span;
  * @see InMemoryStorage
  */
 public abstract class StorageComponent extends Component {
+
+  public Traces traces() {
+    return new TracesAdapter(spanStore()); // delegates to deprecated methods.
+  }
 
   public abstract SpanStore spanStore();
 
@@ -38,10 +45,60 @@ public abstract class StorageComponent extends Component {
       @Override public Call<List<String>> getValues(String key) {
         return Call.emptyList();
       }
+
+      @Override public String toString() {
+        return "EmptyAutocompleteTags{}";
+      }
+    };
+  }
+
+  public ServiceAndSpanNames serviceAndSpanNames() { // delegates to deprecated methods.
+    final SpanStore delegate = spanStore();
+    return new ServiceAndSpanNames() {
+      @Override public Call<List<String>> getServiceNames() {
+        return delegate.getServiceNames();
+      }
+
+      @Override public Call<List<String>> getRemoteServiceNames(String serviceName) {
+        return Call.emptyList(); // incorrect for not yet ported 3rd party storage components.
+      }
+
+      @Override public Call<List<String>> getSpanNames(String serviceName) {
+        return delegate.getSpanNames(serviceName);
+      }
+
+      @Override public String toString() {
+        return "ServiceAndSpanNames{" + delegate + "}";
+      }
     };
   }
 
   public abstract SpanConsumer spanConsumer();
+
+  /**
+   * A storage request failed and was dropped due to a limit, resource unavailability, or a timeout.
+   * Implementations of throttling can use this signal to differentiate between failures, for
+   * example to reduce traffic.
+   *
+   * <p>Callers of this method will submit an exception raised by {@link Call#execute()} or on the
+   * error callback of {@link Call#enqueue(Callback)}.
+   *
+   * <p>By default, this returns true if the input is a {@link RejectedExecutionException}. When
+   * originating exceptions, use this type to indicate a load related failure.
+   *
+   * <p>It is generally preferred to specialize this method to handle relevant exceptions for the
+   * particular storage rather than wrapping them in {@link RejectedExecutionException} at call
+   * sites. Extra wrapping can make errors harder to read, for example, by making it harder to
+   * "google" a solution for a well known error message for the storage client, instead thinking the
+   * error is in Zipkin code itself.
+   *
+   * <h3>See also</h3>
+   * <p>While implementation is flexible, one known use is <a href="https://github.com/Netflix/concurrency-limits">Netflix
+   * concurrency limits</a>
+   */
+  public boolean isOverCapacity(Throwable e) {
+    return e instanceof RejectedExecutionException;
+  }
 
   public static abstract class Builder {
 
@@ -83,31 +140,32 @@ public abstract class StorageComponent extends Component {
      * there is overhead associated with indexing spans both by 64 and 128-bit trace IDs. When a
      * site has finished upgrading to 128-bit trace IDs, they should enable this setting.
      *
-     * <p>See https://github.com/openzipkin/b3-propagation/issues/6 for the status of known open
-     * source libraries on 128-bit trace identifiers.
+     * <p>See https://github.com/openzipkin/b3-propagation/issues/6 for the status of
+     * known open source libraries on 128-bit trace identifiers.
      */
     public abstract Builder strictTraceId(boolean strictTraceId);
 
     /**
-     * False is an attempt to disable indexing, leaving only {@link SpanStore#getTrace(String)}
+     * False is an attempt to disable indexing, leaving only {@link StorageComponent#traces()}
      * supported. For example, query requests will be disabled.
      *
      * The use case is typically to support 100% sampled data, or when traces are searched using
      * alternative means such as a logging index.
      *
-     * <p>Refer to implementation docs for the impact of this parameter. Operations that use indexes
-     * should return empty as opposed to throwing an exception.
+     * <p>Refer to implementation docs for the impact of this parameter. Operations that use
+     * indexes should return empty as opposed to throwing an exception.
      */
     public abstract Builder searchEnabled(boolean searchEnabled);
 
     /**
-     * Autocomplete is used by the UI to suggest getValues for site-specific tags, such as environment
-     * names. The getKeys here would appear in {@link Span#tags() span tags}. Good choices for
-     * autocomplete are limited in cardinality for the same reasons as service and span names.
+     * Autocomplete is used by the UI to suggest getValues for site-specific tags, such as
+     * environment names. The getKeys here would appear in {@link Span#tags() span tags}. Good
+     * choices for autocomplete are limited in cardinality for the same reasons as service and span
+     * names.
      *
      * For example, "http.url" would be a bad choice for autocomplete, not just because it isn't
-     * site-specific (such as environment would be), but also as there are unlimited getValues due to
-     * factors such as unique ids in the path.
+     * site-specific (such as environment would be), but also as there are unlimited getValues due
+     * to factors such as unique ids in the path.
      *
      * @param keys controls the span values stored for auto-complete.
      */
@@ -122,8 +180,9 @@ public abstract class StorageComponent extends Component {
       return this;
     }
 
-    /** How many autocomplete key/value pairs to suppress at a time.  */
-    public Builder autocompleteCardinality(int autocompleteCardinality) { // not abstract as added later
+    /** How many autocomplete key/value pairs to suppress at a time. */
+    public Builder autocompleteCardinality(
+      int autocompleteCardinality) { // not abstract as added later
       Logger.getLogger(getClass().getName()).info("autocompleteCardinality not yet supported");
       return this;
     }

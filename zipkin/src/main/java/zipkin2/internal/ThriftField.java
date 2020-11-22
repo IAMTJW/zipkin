@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -12,8 +12,6 @@
  * the License.
  */
 package zipkin2.internal;
-
-import java.nio.ByteBuffer;
 
 final class ThriftField {
   // taken from org.apache.thrift.protocol.TType
@@ -38,16 +36,16 @@ final class ThriftField {
     this.id = id;
   }
 
-  void write(Buffer buffer) {
+  void write(WriteBuffer buffer) {
     buffer.writeByte(type);
     // Write ID as a short!
     buffer.writeByte((id >>> 8L) & 0xff);
     buffer.writeByte(id & 0xff);
   }
 
-  static ThriftField read(ByteBuffer bytes) {
-    byte type = bytes.get();
-    return new ThriftField(type, type == TYPE_STOP ? TYPE_STOP : bytes.getShort());
+  static ThriftField read(ReadBuffer bytes) {
+    byte type = bytes.readByte();
+    return new ThriftField(type, type == TYPE_STOP ? TYPE_STOP : bytes.readShort());
   }
 
   boolean isEqualTo(ThriftField that) {

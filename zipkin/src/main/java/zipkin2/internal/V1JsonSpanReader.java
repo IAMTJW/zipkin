@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -29,10 +29,10 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
 
   V1Span.Builder builder;
 
-  public boolean readList(byte[] bytes, Collection<Span> out) {
-    if (bytes.length == 0) return false;
+  public boolean readList(ReadBuffer buffer, Collection<Span> out) {
+    if (buffer.available() == 0) return false;
     V1SpanConverter converter = V1SpanConverter.create();
-    JsonReader reader = new JsonReader(bytes);
+    JsonReader reader = new JsonReader(buffer);
     try {
       reader.beginArray();
       if (!reader.hasNext()) return false;
@@ -47,8 +47,7 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
     }
   }
 
-  @Override
-  public V1Span fromJson(JsonReader reader) throws IOException {
+  @Override public V1Span fromJson(JsonReader reader) throws IOException {
     if (builder == null) {
       builder = V1Span.newBuilder();
     } else {
@@ -120,8 +119,7 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
     builder.addAnnotation(timestamp, value, endpoint);
   }
 
-  @Override
-  public String toString() {
+  @Override public String toString() {
     return "Span";
   }
 

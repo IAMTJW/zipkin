@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,16 +13,17 @@
  */
 package zipkin2;
 
+import java.nio.ByteBuffer;
 import zipkin2.codec.BytesDecoder;
 import zipkin2.codec.SpanBytesDecoder;
 
 /**
  * Detecting decoder used in transports which don't include means to identify the type of the data.
  *
- * <p>For example, we can identify the encoding and also the format in http via the request path and
- * content-type. However, in Kafka it could be that folks send mixed Zipkin data without identifying
- * its format. For example, Kafka historically has no content-type and users don't always segregate
- * different queues by instrumentation format.
+ * <p>For example, we can identify the encoding and also the format in http via the request path
+ * and content-type. However, in Kafka it could be that folks send mixed Zipkin data without
+ * identifying its format. For example, Kafka historically has no content-type and users don't
+ * always segregate different queues by instrumentation format.
  */
 // In TBinaryProtocol encoding, the first byte is the TType, in a range 0-16
 // .. If the first byte isn't in that range, it isn't a thrift.
@@ -54,9 +55,12 @@ public final class SpanBytesDecoderDetector {
    */
   static final byte[] TAGS_FIELD = {'"', 't', 'a', 'g', 's', '"'};
 
-  /** @throws IllegalArgumentException if the input isn't a v1 json or thrift single-span message */
+  /**
+   * Throws {@link IllegalArgumentException} if the input isn't a v1 json or thrift single-span
+   * message
+   */
   public static BytesDecoder<Span> decoderForMessage(byte[] span) {
-    BytesDecoder<Span> decoder = detectDecoder(span);
+    BytesDecoder<Span> decoder = detectDecoder(ByteBuffer.wrap(span));
     if (span[0] == 12 /* List[ThriftSpan] */ || span[0] == '[') {
       throw new IllegalArgumentException("Expected json or thrift object, not list encoding");
     }
@@ -66,23 +70,32 @@ public final class SpanBytesDecoderDetector {
     return decoder;
   }
 
-  /** @throws IllegalArgumentException if the input isn't a json, proto3 or thrift list message. */
+  /**
+   * Throws {@link IllegalArgumentException} if the input isn't a json, proto3 or thrift list
+   * message.
+   */
   public static BytesDecoder<Span> decoderForListMessage(byte[] spans) {
+    return decoderForListMessage(ByteBuffer.wrap(spans));
+  }
+
+  public static BytesDecoder<Span> decoderForListMessage(ByteBuffer spans) {
     BytesDecoder<Span> decoder = detectDecoder(spans);
-    if (spans[0] != 12 /* List[ThriftSpan] */
-      && spans[0] != 11 /* openzipkin/zipkin-reporter-java#133 */
-      && !protobuf3(spans) && spans[0] != '[') {
+    byte first = spans.get(spans.position());
+    if (first != 12 /* List[ThriftSpan] */
+        && first != 11 /* openzipkin/zipkin-reporter-java#133 */
+        && !protobuf3(spans) && first != '[') {
       throw new IllegalArgumentException("Expected json, proto3 or thrift list encoding");
     }
     return decoder;
   }
 
   /** @throws IllegalArgumentException if the input isn't a json or thrift list or object. */
-  static BytesDecoder<Span> detectDecoder(byte[] bytes) {
-    if (bytes[0] <= 16) { // binary format
+  static BytesDecoder<Span> detectDecoder(ByteBuffer bytes) {
+    byte first = bytes.get(bytes.position());
+    if (first <= 16) { // binary format
       if (protobuf3(bytes)) return SpanBytesDecoder.PROTO3;
       return SpanBytesDecoder.THRIFT; /* the first byte is the TType, in a range 0-16 */
-    } else if (bytes[0] != '[' && bytes[0] != '{') {
+    } else if (first != '[' && first != '{') {
       throw new IllegalArgumentException("Could not detect the span format");
     }
     if (contains(bytes, ENDPOINT_FIELD_SUFFIX)) return SpanBytesDecoder.JSON_V2;
@@ -90,11 +103,11 @@ public final class SpanBytesDecoderDetector {
     return SpanBytesDecoder.JSON_V1;
   }
 
-  static boolean contains(byte[] bytes, byte[] subsequence) {
+  static boolean contains(ByteBuffer bytes, byte[] subsequence) {
     bytes:
-    for (int i = 0; i < bytes.length - subsequence.length + 1; i++) {
+    for (int i = 0; i < bytes.remaining() - subsequence.length + 1; i++) {
       for (int j = 0; j < subsequence.length; j++) {
-        if (bytes[i + j] != subsequence[j]) {
+        if (bytes.get(bytes.position() + i + j) != subsequence[j]) {
           continue bytes;
         }
       }
@@ -104,9 +117,11 @@ public final class SpanBytesDecoderDetector {
   }
 
   /* span key or trace ID key */
-  static boolean protobuf3(byte[] bytes) {
-    return bytes[0] == 10 && bytes[1] != 0; // varint follows and won't be zero
+  static boolean protobuf3(ByteBuffer bytes) {
+    // varint follows and won't be zero
+    return bytes.get(bytes.position()) == 10 && bytes.get(bytes.position() + 1) != 0;
   }
 
-  SpanBytesDecoderDetector() {}
+  SpanBytesDecoderDetector() {
+  }
 }

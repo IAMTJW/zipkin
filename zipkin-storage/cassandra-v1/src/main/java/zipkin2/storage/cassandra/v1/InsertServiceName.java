@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,52 +13,50 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.Insert;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
-import zipkin2.storage.cassandra.internal.call.DeduplicatingCall;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
+import java.util.concurrent.CompletionStage;
+import zipkin2.internal.DelayLimiter;
+import zipkin2.storage.cassandra.internal.call.DeduplicatingInsert;
 
-final class InsertServiceName extends DeduplicatingCall<String> {
+import static zipkin2.storage.cassandra.v1.Tables.SERVICE_NAMES;
 
-  static class Factory extends DeduplicatingCall.Factory<String, InsertServiceName> {
-    final Session session;
+final class InsertServiceName extends DeduplicatingInsert<String> {
+  static final class Factory extends DeduplicatingInsert.Factory<String> {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
 
     Factory(CassandraStorage storage, int indexTtl) {
       super(storage.autocompleteTtl, storage.autocompleteCardinality);
       session = storage.session();
-      Insert insertQuery = QueryBuilder.insertInto(Tables.SERVICE_NAMES)
-        .value("service_name", QueryBuilder.bindMarker("service_name"));
-      if (indexTtl > 0) insertQuery.using(QueryBuilder.ttl(indexTtl));
-      preparedStatement = session.prepare(insertQuery);
+      String statement = "INSERT INTO " + SERVICE_NAMES + " (service_name) VALUES (?)";
+      this.preparedStatement =
+        session.prepare(indexTtl > 0 ? statement + " USING TTL " + indexTtl : statement);
     }
 
     @Override protected InsertServiceName newCall(String input) {
-      return new InsertServiceName(this, input);
+      return new InsertServiceName(this, delayLimiter, input);
     }
   }
 
   final Factory factory;
-  final String service_name;
 
-  InsertServiceName(Factory factory, String service_name) {
-    super(factory, service_name);
+  InsertServiceName(Factory factory, DelayLimiter<String> delayLimiter, String service_name) {
+    super(delayLimiter, service_name);
     this.factory = factory;
-    this.service_name = service_name;
   }
 
-  @Override protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(
-      factory.preparedStatement.bind().setString("service_name", service_name));
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(factory.preparedStatement.boundStatementBuilder()
+      .setString(0, input).build());
   }
 
   @Override public String toString() {
-    return "InsertServiceName(" + service_name + ")";
+    return "InsertServiceName(" + input + ")";
   }
 
   @Override public InsertServiceName clone() {
-    return new InsertServiceName(factory, service_name);
+    return new InsertServiceName(factory, delayLimiter, input);
   }
 }

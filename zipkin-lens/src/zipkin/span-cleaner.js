@@ -1,4 +1,19 @@
-import _ from 'lodash';
+/*
+ * Copyright 2015-2020 The OpenZipkin Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
+import isEqual from 'lodash/isEqual';
+import sortBy from 'lodash/sortBy';
+import unionWith from 'lodash/unionWith';
 
 export function normalizeTraceId(traceId) {
   if (traceId.length > 16) {
@@ -28,19 +43,24 @@ export function clean(span) {
   }
   res.id = id;
 
-  if (span.name && span.name !== '' && span.name !== 'unknown') res.name = span.name;
+  if (span.name && span.name !== '' && span.name !== 'unknown')
+    res.name = span.name;
   if (span.kind) res.kind = span.kind;
 
   if (span.timestamp) res.timestamp = span.timestamp;
   if (span.duration) res.duration = span.duration;
 
-  if (isEndpoint(span.localEndpoint)) res.localEndpoint = Object.assign({}, span.localEndpoint);
-  if (isEndpoint(span.remoteEndpoint)) res.remoteEndpoint = Object.assign({}, span.remoteEndpoint);
+  if (isEndpoint(span.localEndpoint))
+    res.localEndpoint = { ...span.localEndpoint };
+  if (isEndpoint(span.remoteEndpoint))
+    res.remoteEndpoint = { ...span.remoteEndpoint };
 
   res.annotations = span.annotations ? span.annotations.slice(0) : [];
   if (res.annotations.length > 1) {
-    res.annotations = _(_.unionWith(res.annotations, _.isEqual))
-      .sortBy('timestamp', 'value').value();
+    res.annotations = sortBy(unionWith(res.annotations, isEqual), [
+      'timestamp',
+      'value',
+    ]);
   }
 
   res.tags = span.tags || {};
@@ -73,9 +93,9 @@ export function merge(left, right) {
   const duration = left.duration || right.duration;
   if (duration) res.duration = duration;
 
-  const localEndpoint = Object.assign({}, left.localEndpoint, right.localEndpoint);
+  const localEndpoint = { ...left.localEndpoint, ...right.localEndpoint };
   if (isEndpoint(localEndpoint)) res.localEndpoint = localEndpoint;
-  const remoteEndpoint = Object.assign({}, left.remoteEndpoint, right.remoteEndpoint);
+  const remoteEndpoint = { ...left.remoteEndpoint, ...right.remoteEndpoint };
   if (isEndpoint(remoteEndpoint)) res.remoteEndpoint = remoteEndpoint;
 
   if (left.annotations.length === 0) {
@@ -83,11 +103,13 @@ export function merge(left, right) {
   } else if (right.annotations.length === 0) {
     res.annotations = left.annotations;
   } else {
-    res.annotations = _(_.unionWith(left.annotations, right.annotations, _.isEqual))
-      .sortBy('timestamp', 'value').value();
+    res.annotations = sortBy(
+      unionWith(left.annotations, right.annotations, isEqual),
+      ['timestamp', 'value'],
+    );
   }
 
-  res.tags = Object.assign({}, left.tags, right.tags);
+  res.tags = { ...left.tags, ...right.tags };
 
   if (left.debug || right.debug) res.debug = true;
   if (left.shared || right.shared) res.shared = true;
@@ -136,7 +158,8 @@ function compareShared(left, right) {
   return 0;
 }
 
-export function cleanupComparator(left, right) { // exported for testing
+export function cleanupComparator(left, right) {
+  // exported for testing
   const bySpanId = compare(left.id, right.id);
   if (bySpanId !== 0) return bySpanId;
   const byShared = compareShared(left, right);
@@ -146,7 +169,11 @@ export function cleanupComparator(left, right) { // exported for testing
 
 function tryMerge(current, endpoint) {
   if (!endpoint) return true;
-  if (current.serviceName && endpoint.serviceName && current.serviceName !== endpoint.serviceName) {
+  if (
+    current.serviceName &&
+    endpoint.serviceName &&
+    current.serviceName !== endpoint.serviceName
+  ) {
     return false;
   }
   if (current.ipv4 && endpoint.ipv4 && current.ipv4 !== endpoint.ipv4) {
@@ -168,11 +195,14 @@ function tryMerge(current, endpoint) {
 }
 
 // sort by timestamp, then name, root/shared first in case of skew
-export function spanComparator(a, b) { // exported for testing
-  if (!a.parentId && b.parentId) { // a is root
+export function spanComparator(a, b) {
+  // exported for testing
+  if (!a.parentId && b.parentId) {
+    // a is root
     return -1;
   }
-  if (a.parentId && !b.parentId) { // b is root
+  if (a.parentId && !b.parentId) {
+    // b is root
     return 1;
   }
 
@@ -214,13 +244,16 @@ export function mergeV2ById(spans) {
       span.traceId = traceId;
     }
 
-    const localEndpoint = span.localEndpoint ? Object.assign({}, span.localEndpoint) : {};
+    const localEndpoint = span.localEndpoint ? { ...span.localEndpoint } : {};
     while (i + 1 < length) {
       const next = result[i + 1];
       if (next.id !== span.id) break;
 
       // This cautiously merges with the next span, if we think it was sent in multiple pieces.
-      if (span.shared === next.shared && tryMerge(localEndpoint, next.localEndpoint)) {
+      if (
+        span.shared === next.shared &&
+        tryMerge(localEndpoint, next.localEndpoint)
+      ) {
         span = merge(span, next);
 
         // remove the merged element
@@ -250,5 +283,15 @@ export function mergeV2ById(spans) {
     result[i] = span;
   }
 
-  return result.sort(spanComparator);
+  const sorted = result.sort(spanComparator);
+
+  // Look to see if there is a root span, in case we need to correct its shared flag
+  if (sorted[0].parentId || !sorted[0].shared) return sorted;
+
+  // Sorting puts root spans first. If there's only one root, remove any shared flag.
+  if (sorted.length === 1 || sorted[1].parentId) {
+    delete sorted[0].shared;
+  }
+
+  return sorted;
 }

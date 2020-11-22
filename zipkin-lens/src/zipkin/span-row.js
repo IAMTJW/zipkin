@@ -1,3 +1,16 @@
+/*
+ * Copyright 2015-2020 The OpenZipkin Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
 import { ConstantNames } from './trace-constants';
 
 // returns 'critical' if one of the spans has an error tag or currentErrorType was already critical,
@@ -5,10 +18,11 @@ import { ConstantNames } from './trace-constants';
 // returns currentErrorType
 export function getErrorType(span, currentErrorType) {
   if (currentErrorType === 'critical') return currentErrorType;
-  if (span.tags.error !== undefined) { // empty error tag is ok
+  if (span.tags.error !== undefined) {
+    // empty error tag is ok
     return 'critical';
   }
-  if (span.annotations.findIndex(ann => ann.value === 'error') !== -1) {
+  if (span.annotations.findIndex((ann) => ann.value === 'error') !== -1) {
     return 'transient';
   }
   return currentErrorType;
@@ -16,9 +30,7 @@ export function getErrorType(span, currentErrorType) {
 
 export function formatEndpoint(endpoint) {
   if (!endpoint) return undefined;
-  const {
-    ipv4, ipv6, port, serviceName,
-  } = endpoint;
+  const { ipv4, ipv6, port, serviceName } = endpoint;
   if (ipv4 || ipv6) {
     const ip = ipv6 ? `[${ipv6}]` : ipv4; // arbitrarily prefer ipv6
     const portString = port ? `:${port}` : '';
@@ -164,10 +176,16 @@ function parseAnnotationRows(span) {
   const annotations = []; // prefer empty to undefined for arrays
 
   if (beginAnnotation) {
-    annotations.push(toAnnotationRow({
-      value: begin,
-      timestamp: startTs,
-    }, localFormatted, true));
+    annotations.push(
+      toAnnotationRow(
+        {
+          value: begin,
+          timestamp: startTs,
+        },
+        localFormatted,
+        true,
+      ),
+    );
   }
 
   annotationsToAdd.forEach((a) => {
@@ -177,10 +195,16 @@ function parseAnnotationRows(span) {
   });
 
   if (endAnnotation) {
-    annotations.push(toAnnotationRow({
-      value: end,
-      timestamp: endTs,
-    }, localFormatted, true));
+    annotations.push(
+      toAnnotationRow(
+        {
+          value: end,
+          timestamp: endTs,
+        },
+        localFormatted,
+        true,
+      ),
+    );
   }
   return annotations;
 }
@@ -202,7 +226,12 @@ function parseTagRows(span) {
   }
 
   // Ensure there's at least some data that will display the local address
-  if (!span.kind && span.annotations.length === 0 && localFormatted && keys.length === 0) {
+  if (
+    !span.kind &&
+    span.annotations.length === 0 &&
+    localFormatted &&
+    keys.length === 0
+  ) {
     tagRows.push({
       key: 'Local Address',
       value: localFormatted,
@@ -237,14 +266,20 @@ function parseTagRows(span) {
 
 // This ensures we don't add duplicate annotations on merge
 function maybePushAnnotation(annotations, a) {
-  if (annotations.findIndex(b => a.timestamp === b.timestamp && a.value === b.value) === -1) {
+  if (
+    annotations.findIndex(
+      (b) => a.timestamp === b.timestamp && a.value === b.value,
+    ) === -1
+  ) {
     annotations.push(a);
   }
 }
 
 // This ensures we only add rows for tags that are unique on key and value on merge
 function maybePushTag(tags, a) {
-  const sameKeyAndValue = tags.filter(b => a.key === b.key && a.value === b.value);
+  const sameKeyAndValue = tags.filter(
+    (b) => a.key === b.key && a.value === b.value,
+  );
   if (sameKeyAndValue.length === 0) {
     tags.push(a);
     return;
@@ -266,13 +301,17 @@ function maybePushTag(tags, a) {
 // This guards to ensure we don't add duplicate service names on merge
 function maybePushServiceName(serviceNames, serviceName) {
   if (!serviceName) return;
-  if (serviceNames.findIndex(s => s === serviceName) === -1) {
+  if (serviceNames.findIndex((s) => s === serviceName) === -1) {
     serviceNames.push(serviceName);
   }
 }
 
-function getServiceName(endpoint) {
+export function getServiceName(endpoint) {
   return endpoint ? endpoint.serviceName : undefined;
+}
+
+function isNullOrUndefined(ref) {
+  return typeof ref === 'undefined' || ref === null;
 }
 
 // Merges the data into a single span row, which is lacking presentation information
@@ -294,7 +333,8 @@ export function newSpanRow(spansToMerge, isLeafSpan) {
       res.spanName = next.name; // prefer the server's span name
     }
 
-    if (next.shared) { // save off any shared timestamp, it is our second choice
+    if (next.shared) {
+      // save off any shared timestamp, it is our second choice
       if (!sharedTimestamp) sharedTimestamp = next.timestamp;
       if (!sharedDuration) sharedDuration = next.duration;
     } else {
@@ -306,7 +346,12 @@ export function newSpanRow(spansToMerge, isLeafSpan) {
     const nextRemoteServiceName = getServiceName(next.remoteEndpoint);
     if (nextLocalServiceName && next.kind === 'SERVER') {
       res.serviceName = nextLocalServiceName; // prefer the server's service name
-    } else if (isLeafSpan && nextRemoteServiceName && next.kind === 'CLIENT' && !res.serviceName) {
+    } else if (
+      isLeafSpan &&
+      nextRemoteServiceName &&
+      next.kind === 'CLIENT' &&
+      !res.serviceName
+    ) {
       // use the client's remote service name only on leaf spans
       res.serviceName = nextRemoteServiceName;
     } else if (nextLocalServiceName && !res.serviceName) {
@@ -316,8 +361,10 @@ export function newSpanRow(spansToMerge, isLeafSpan) {
     maybePushServiceName(res.serviceNames, nextLocalServiceName);
     maybePushServiceName(res.serviceNames, nextRemoteServiceName);
 
-    parseAnnotationRows(next).forEach(a => maybePushAnnotation(res.annotations, a));
-    parseTagRows(next).forEach(t => maybePushTag(res.tags, t));
+    parseAnnotationRows(next).forEach((a) =>
+      maybePushAnnotation(res.annotations, a),
+    );
+    parseTagRows(next).forEach((t) => maybePushTag(res.tags, t));
 
     res.errorType = getErrorType(next, res.errorType);
 
@@ -328,6 +375,15 @@ export function newSpanRow(spansToMerge, isLeafSpan) {
   if (!res.timestamp && sharedTimestamp) res.timestamp = sharedTimestamp;
   // duration is used for deriving data, and also for the zoom function
   if (!res.duration && sharedDuration) res.duration = sharedDuration;
+
+  // Ensure no required property failures rendering an incomplete or malformed trace
+  if (isNullOrUndefined(res.duration)) res.duration = 0;
+  if (isNullOrUndefined(res.spanName)) res.spanName = 'unknown';
+  if (isNullOrUndefined(res.serviceName)) res.serviceName = 'unknown';
+  res.annotations.forEach((a) => {
+    // eslint-disable-next-line no-param-reassign
+    if (isNullOrUndefined(a.endpoint)) a.endpoint = 'unknown';
+  });
 
   res.serviceNames.sort();
   res.annotations.sort((a, b) => a.timestamp - b.timestamp);

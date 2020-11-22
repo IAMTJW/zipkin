@@ -23,6 +23,8 @@ abstract class IndexTemplates {
 
   abstract float version();
 
+  abstract char indexTypeDelimiter();
+
   abstract String span();
 
   abstract String dependency();
@@ -32,6 +34,8 @@ abstract class IndexTemplates {
   @AutoValue.Builder
   interface Builder {
     Builder version(float version);
+
+    Builder indexTypeDelimiter(char indexTypeDelimiter);
 
     Builder span(String span);
 

@@ -1,3 +1,16 @@
+/*
+ * Copyright 2015-2020 The OpenZipkin Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
 import {
   ipsMatch,
   getClockSkew,
@@ -66,75 +79,87 @@ describe('getClockSkew', () => {
    * adjusting it!)
    */
   it('clock skew should only correct across different hosts', () => {
-    const parent = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'CLIENT',
-      localEndpoint: frontend,
-      timestamp: 20,
-      duration: 20,
-    }));
-    const child = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'SERVER',
-      localEndpoint: frontend,
-      timestamp: 10, // skew
-      duration: 10,
-      shared: true,
-    }));
+    const parent = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'CLIENT',
+        localEndpoint: frontend,
+        timestamp: 20,
+        duration: 20,
+      }),
+    );
+    const child = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'SERVER',
+        localEndpoint: frontend,
+        timestamp: 10, // skew
+        duration: 10,
+        shared: true,
+      }),
+    );
     parent.addChild(child);
 
     expect(getClockSkew(child)).toBeUndefined();
   });
 
   it('clock skew should only exist when client is behind server', () => {
-    const parent = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'CLIENT',
-      localEndpoint: frontend,
-      timestamp: 20,
-      duration: 20,
-    }));
-    const child = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'SERVER',
-      localEndpoint: backend,
-      timestamp: 30, // no skew
-      duration: 10,
-      shared: true,
-    }));
+    const parent = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'CLIENT',
+        localEndpoint: frontend,
+        timestamp: 20,
+        duration: 20,
+      }),
+    );
+    const child = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'SERVER',
+        localEndpoint: backend,
+        timestamp: 30, // no skew
+        duration: 10,
+        shared: true,
+      }),
+    );
     parent.addChild(child);
 
     expect(getClockSkew(child)).toBeUndefined();
   });
 
   it('clock skew should be attributed to the server endpoint', () => {
-    const parent = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'CLIENT',
-      localEndpoint: frontend,
-      timestamp: 20,
-      duration: 20,
-    }));
-    const child = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'SERVER',
-      localEndpoint: backend,
-      timestamp: 10, // skew
-      duration: 10,
-      shared: true,
-    }));
+    const parent = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'CLIENT',
+        localEndpoint: frontend,
+        timestamp: 20,
+        duration: 20,
+      }),
+    );
+    const child = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'SERVER',
+        localEndpoint: backend,
+        timestamp: 10, // skew
+        duration: 10,
+        shared: true,
+      }),
+    );
     parent.addChild(child);
 
     // Skew correction pushes the server side forward, so the skew endpoint is the server
@@ -142,24 +167,28 @@ describe('getClockSkew', () => {
   });
 
   it('clock skew should be attributed to the server endpoint even if missing shared flag', () => {
-    const parent = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'CLIENT',
-      localEndpoint: frontend,
-      timestamp: 20,
-      duration: 20,
-    }));
-    const child = new SpanNode(clean({
-      traceId: '1',
-      parentId: '2',
-      id: '3',
-      kind: 'SERVER',
-      localEndpoint: backend,
-      timestamp: 10, // skew
-      duration: 10,
-    }));
+    const parent = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'CLIENT',
+        localEndpoint: frontend,
+        timestamp: 20,
+        duration: 20,
+      }),
+    );
+    const child = new SpanNode(
+      clean({
+        traceId: '1',
+        parentId: '2',
+        id: '3',
+        kind: 'SERVER',
+        localEndpoint: backend,
+        timestamp: 10, // skew
+        duration: 10,
+      }),
+    );
     parent.addChild(child);
 
     // Skew correction pushes the server side forward, so the skew endpoint is the server
@@ -195,8 +224,9 @@ describe('getClockSkew', () => {
     parent.addChild(child);
 
     expect(getClockSkew(child).skew).toEqual(
-      server.timestamp - client.timestamp // how much the server is behind
-      - (client.duration - server.duration) / 2, // center the server by splitting what's left
+      server.timestamp -
+      client.timestamp - // how much the server is behind
+        (client.duration - server.duration) / 2, // center the server by splitting what's left
     );
   });
 
@@ -224,8 +254,9 @@ describe('getClockSkew', () => {
     parent.addChild(child);
 
     expect(getClockSkew(child).skew).toEqual(
-      server.timestamp - client.timestamp // how much server is behind
-      - 1, // assume it takes at least 1us to get to the server
+      server.timestamp -
+      client.timestamp - // how much server is behind
+        1, // assume it takes at least 1us to get to the server
     );
   });
 
@@ -253,8 +284,9 @@ describe('getClockSkew', () => {
     parent.addChild(child);
 
     expect(getClockSkew(child).skew).toEqual(
-      server.timestamp - client.timestamp // how much server is behind
-      - 1, // assume it takes at least 1us to get to the server
+      server.timestamp -
+      client.timestamp - // how much server is behind
+        1, // assume it takes at least 1us to get to the server
     );
   });
 });
@@ -289,7 +321,7 @@ function expectChildrenToBeInOrder(root) {
     }
 
     // process the next level of the tree
-    current.children.forEach(child => queue.push(child));
+    current.children.forEach((child) => queue.push(child));
   }
 }
 
@@ -312,12 +344,14 @@ describe('treeCorrectedForClockSkew', () => {
 
   it('should skip on duplicate root', () => {
     const duplicate = [];
-    skewedTrace.forEach(span => duplicate.push(span));
-    duplicate.push(clean({
-      traceId: skewedTrace[0].traceId,
-      id: 'cafebabe',
-      name: 'curtain',
-    }));
+    skewedTrace.forEach((span) => duplicate.push(span));
+    duplicate.push(
+      clean({
+        traceId: skewedTrace[0].traceId,
+        id: 'cafebabe',
+        name: 'curtain',
+      }),
+    );
     const notCorrected = treeCorrectedForClockSkew(duplicate);
     expect(notCorrected).toEqual(new SpanNodeBuilder({}).build(duplicate));
   });

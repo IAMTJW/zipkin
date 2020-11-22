@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -37,8 +37,8 @@ import static java.util.logging.Level.FINE;
 public final class DependencyLinker {
   final Logger logger;
   final SpanNode.Builder builder;
-  final Map<Pair, Long> callCounts = new LinkedHashMap<>();
-  final Map<Pair, Long> errorCounts = new LinkedHashMap<>();
+  final Map<Pair, Long> callCounts = new LinkedHashMap<Pair, Long>();
+  final Map<Pair, Long> errorCounts = new LinkedHashMap<Pair, Long>();
 
   public DependencyLinker() {
     this(Logger.getLogger(DependencyLinker.class.getName()));
@@ -49,9 +49,7 @@ public final class DependencyLinker {
     this.builder = SpanNode.newBuilder(logger);
   }
 
-  /**
-   * @param spans spans where all spans have the same trace id
-   */
+  /** All {@code spans} must have the same trace id. */
   public DependencyLinker putTrace(List<Span> spans) {
     if (spans.isEmpty()) return this;
     SpanNode traceTree = builder.build(spans);
@@ -186,8 +184,8 @@ public final class DependencyLinker {
 
   /** links are merged by mapping to parent/child and summing corresponding links */
   public static List<DependencyLink> merge(Iterable<DependencyLink> in) {
-    Map<Pair, Long> callCounts = new LinkedHashMap<>();
-    Map<Pair, Long> errorCounts = new LinkedHashMap<>();
+    Map<Pair, Long> callCounts = new LinkedHashMap<Pair, Long>();
+    Map<Pair, Long> errorCounts = new LinkedHashMap<Pair, Long>();
 
     for (DependencyLink link : in) {
       Pair parentChild = new Pair(link.parent(), link.child());
@@ -204,7 +202,7 @@ public final class DependencyLinker {
 
   static List<DependencyLink> link(Map<Pair, Long> callCounts,
     Map<Pair, Long> errorCounts) {
-    List<DependencyLink> result = new ArrayList<>(callCounts.size());
+    List<DependencyLink> result = new ArrayList<DependencyLink>(callCounts.size());
     for (Map.Entry<Pair, Long> entry : callCounts.entrySet()) {
       Pair parentChild = entry.getKey();
       result.add(DependencyLink.newBuilder()

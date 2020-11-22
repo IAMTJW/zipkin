@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -28,7 +28,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.errors.InterruptException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zipkin2.Callback;
@@ -53,7 +52,7 @@ final class KafkaCollectorWorker implements Runnable {
   final List<String> topics;
   final Collector collector;
   final CollectorMetrics metrics;
-  /** Kafka topic partitions currently assigned to this worker. List is not modifiable. */
+  // added for integration tests only, see ITKafkaCollector
   final AtomicReference<List<TopicPartition>> assignedPartitions =
       new AtomicReference<>(Collections.emptyList());
   final AtomicBoolean running = new AtomicBoolean(true);
@@ -67,12 +66,15 @@ final class KafkaCollectorWorker implements Runnable {
 
   @Override
   public void run() {
-    try (KafkaConsumer kafkaConsumer = new KafkaConsumer<>(properties)) {
+    try (KafkaConsumer<byte[], byte[]> kafkaConsumer = new KafkaConsumer<>(properties)) {
       kafkaConsumer.subscribe(
         topics,
+        // added for integration tests only, see ITKafkaCollector
         new ConsumerRebalanceListener() {
           @Override
           public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+            // technically we should remove only the revoked partitions but for test purposes it
+            // does not matter
             assignedPartitions.set(Collections.emptyList());
           }
 
@@ -81,26 +83,30 @@ final class KafkaCollectorWorker implements Runnable {
             assignedPartitions.set(Collections.unmodifiableList(new ArrayList<>(partitions)));
           }
         });
-      LOG.info("Kafka consumer starting polling loop.");
+      LOG.debug("Kafka consumer starting polling loop.");
       while (running.get()) {
         final ConsumerRecords<byte[], byte[]> consumerRecords = kafkaConsumer.poll(Duration.of(1000, ChronoUnit.MILLIS));
         LOG.debug("Kafka polling returned batch of {} messages.", consumerRecords.count());
         for (ConsumerRecord<byte[], byte[]> record : consumerRecords) {
-          metrics.incrementMessages();
           final byte[] bytes = record.value();
+          metrics.incrementMessages();
+          metrics.incrementBytes(bytes.length);
+
+          if (bytes.length == 0) continue; // lenient on empty messages
 
           if (bytes.length < 2) { // need two bytes to check if protobuf
             metrics.incrementMessagesDropped();
           } else {
             // If we received legacy single-span encoding, decode it into a singleton list
             if (!protobuf3(bytes) && bytes[0] <= 16 && bytes[0] != 12 /* thrift, but not list */) {
-              metrics.incrementBytes(bytes.length);
+              Span span;
               try {
-                Span span = SpanBytesDecoder.THRIFT.decodeOne(bytes);
-                collector.accept(Collections.singletonList(span), NOOP);
+                span = SpanBytesDecoder.THRIFT.decodeOne(bytes);
               } catch (RuntimeException e) {
                 metrics.incrementMessagesDropped();
+                continue;
               }
+              collector.accept(Collections.singletonList(span), NOOP);
             } else {
               collector.acceptSpans(bytes, NOOP);
             }
@@ -111,7 +117,7 @@ final class KafkaCollectorWorker implements Runnable {
       LOG.warn("Unexpected error in polling loop spans", e);
       throw e;
     } finally {
-      LOG.info("Kafka consumer polling loop stopped. Kafka consumer closed.");
+      LOG.debug("Kafka consumer polling loop stopped. Kafka consumer closed.");
     }
   }
 

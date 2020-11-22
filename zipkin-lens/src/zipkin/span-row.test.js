@@ -1,5 +1,22 @@
+/*
+ * Copyright 2015-2020 The OpenZipkin Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
 import { newSpanRow, getErrorType, formatEndpoint } from './span-row';
 import { clean } from './span-cleaner';
+
+// bad traces from https://github.com/openzipkin/zipkin/issues/2829
+import malformedTrace from '../test/data/malformed'; // Many data problems from Kong
+import envoyTrace from '../../testdata/envoy.json'; // Slight problem: missing the local service name
 
 // endpoints from zipkin2.TestObjects
 const frontend = {
@@ -178,12 +195,17 @@ describe('SPAN v2 -> spanRow Conversion', () => {
   });
 
   it('should not duplicate service names', () => {
-    const converted = newSpanRow([clean({
-      traceId: '1',
-      id: '3',
-      localEndpoint: frontend,
-      remoteEndpoint: frontend,
-    })], false);
+    const converted = newSpanRow(
+      [
+        clean({
+          traceId: '1',
+          id: '3',
+          localEndpoint: frontend,
+          remoteEndpoint: frontend,
+        }),
+      ],
+      false,
+    );
 
     expect(converted.serviceNames).toEqual(['frontend']);
   });
@@ -206,6 +228,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       spanId: '0000000000000003',
       spanName: 'get',
       timestamp: 1472470996199000,
+      duration: 0,
       annotations: [
         {
           isDerived: true,
@@ -288,6 +311,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       parentId: '0000000000000002',
       spanId: '0000000000000003',
       spanName: 'get',
+      duration: 0,
       annotations: [
         {
           isDerived: true,
@@ -314,16 +338,12 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       remoteEndpoint: backend,
     });
 
-    const spanRow = {
-      parentId: '0000000000000002',
-      spanId: '0000000000000003',
-      annotations: [],
-      tags: [{ key: 'Server Address', value: '192.168.99.101:9000 (backend)' }],
-      serviceNames: ['backend'],
-      errorType: 'none',
-    };
-
-    expect(newSpanRow([v2], false)).toEqual(spanRow);
+    const converted = newSpanRow([v2], false);
+    expect(converted.tags).toEqual([
+      { key: 'Server Address', value: '192.168.99.101:9000 (backend)' },
+    ]);
+    expect(converted.serviceName).toEqual('unknown');
+    expect(converted.serviceNames).toEqual(['backend']);
   });
 
   // originally zipkin2.v1.SpanConverterTest.noAnnotationsExceptAddresses
@@ -396,8 +416,16 @@ describe('SPAN v2 -> spanRow Conversion', () => {
         },
       ],
       tags: [
-        { key: 'http.path', value: '/api', endpoints: ['192.168.99.101:9000 (backend)'] },
-        { key: 'finagle.version', value: '6.45.0', endpoints: ['192.168.99.101:9000 (backend)'] },
+        {
+          key: 'http.path',
+          value: '/api',
+          endpoints: ['192.168.99.101:9000 (backend)'],
+        },
+        {
+          key: 'finagle.version',
+          value: '6.45.0',
+          endpoints: ['192.168.99.101:9000 (backend)'],
+        },
         { key: 'Client Address', value: '127.0.0.1:8080 (frontend)' },
       ],
       serviceName: 'backend',
@@ -423,6 +451,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       parentId: '0000000000000001',
       spanId: '0000000000000002',
       spanName: 'foo',
+      serviceName: 'unknown',
       timestamp: 1472470996199000,
       duration: 207000,
       annotations: [],
@@ -451,14 +480,17 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       spanId: '0000000000000002',
       spanName: 'foo',
       timestamp: 1472470996199000,
+      duration: 0,
       annotations: [
         {
           isDerived: true,
           value: 'Client Start',
           timestamp: 1472470996199000,
+          endpoint: 'unknown',
         },
       ],
       tags: [],
+      serviceName: 'unknown',
       serviceNames: [],
       errorType: 'none',
     };
@@ -529,6 +561,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       spanId: '0000000000000003',
       spanName: 'get',
       timestamp: 1472470996199000, // When we only have a shared timestamp, we should use it
+      duration: 0,
       annotations: [
         {
           isDerived: true,
@@ -562,6 +595,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
     const spanRow = {
       spanId: '0000000000000002',
       spanName: 'get',
+      duration: 0,
       annotations: [
         {
           isDerived: true,
@@ -588,15 +622,12 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       remoteEndpoint: frontend,
     });
 
-    const spanRow = {
-      spanId: '0000000000000002',
-      annotations: [],
-      tags: [{ key: 'Client Address', value: '127.0.0.1:8080 (frontend)' }],
-      serviceNames: ['frontend'],
-      errorType: 'none',
-    };
-
-    expect(newSpanRow([v2], false)).toEqual(spanRow);
+    const converted = newSpanRow([v2], false);
+    expect(converted.tags).toEqual([
+      { key: 'Client Address', value: '127.0.0.1:8080 (frontend)' },
+    ]);
+    expect(converted.serviceName).toEqual('unknown');
+    expect(converted.serviceNames).toEqual(['frontend']);
   });
 
   // originally zipkin2.v1.SpanConverterTest.localSpan_emptyComponent
@@ -642,6 +673,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       spanId: '0000000000000003',
       spanName: 'send',
       timestamp: 1472470996199000,
+      duration: 0,
       annotations: [
         {
           isDerived: true,
@@ -718,6 +750,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       spanId: '0000000000000003',
       spanName: 'next-message',
       timestamp: 1472470996199000,
+      duration: 0,
       annotations: [
         {
           isDerived: true,
@@ -753,6 +786,7 @@ describe('SPAN v2 -> spanRow Conversion', () => {
       spanId: '0000000000000003',
       spanName: 'next-message',
       timestamp: 1472470996199000,
+      duration: 0,
       annotations: [
         {
           isDerived: true,
@@ -827,7 +861,9 @@ describe('SPAN v2 -> spanRow Conversion', () => {
     });
 
     const spanRow = newSpanRow([v2], false);
-    expect(spanRow.tags.map(s => s.value)).toEqual(['[2001:db8::c001]:80 (there)']);
+    expect(spanRow.tags.map((s) => s.value)).toEqual([
+      '[2001:db8::c001]:80 (there)',
+    ]);
   });
 
   it('should not require endpoint serviceName', () => {
@@ -842,7 +878,9 @@ describe('SPAN v2 -> spanRow Conversion', () => {
     });
 
     const spanRow = newSpanRow([v2], false);
-    expect(spanRow.annotations.map(s => s.endpoint)).toEqual(['[2001:db8::c001]']);
+    expect(spanRow.annotations.map((s) => s.endpoint)).toEqual([
+      '[2001:db8::c001]',
+    ]);
   });
 
   it('converts client leaf spans using its remote service name', () => {
@@ -997,28 +1035,40 @@ describe('newSpanRow', () => {
 
   // originally zipkin2.v1.SpanConverterTest.mergeWhenTagsSentSeparately
   it('should add late server addr', () => {
-    const spanRow = newSpanRow([clientSpan, clean({
-      traceId: '1',
-      id: '3',
-      remoteEndpoint: backend,
-    })], false);
-
-    expect(spanRow.tags).toEqual(
-      [{ key: 'Server Address', value: '192.168.99.101:9000 (backend)' }],
+    const spanRow = newSpanRow(
+      [
+        clientSpan,
+        clean({
+          traceId: '1',
+          id: '3',
+          remoteEndpoint: backend,
+        }),
+      ],
+      false,
     );
+
+    expect(spanRow.tags).toEqual([
+      { key: 'Server Address', value: '192.168.99.101:9000 (backend)' },
+    ]);
   });
 
   // originally zipkin2.v1.SpanConverterTest.mergePrefersServerSpanName
   it('should overwrite client name with server name', () => {
-    const spanRow = newSpanRow([clientSpan, clean({
-      traceId: '1',
-      id: '3',
-      name: 'get /users/:userId',
-      timestamp: 1472470996238000,
-      kind: 'SERVER',
-      localEndpoint: backend,
-      shared: true,
-    })], false);
+    const spanRow = newSpanRow(
+      [
+        clientSpan,
+        clean({
+          traceId: '1',
+          id: '3',
+          name: 'get /users/:userId',
+          timestamp: 1472470996238000,
+          kind: 'SERVER',
+          localEndpoint: backend,
+          shared: true,
+        }),
+      ],
+      false,
+    );
 
     expect(spanRow.spanName).toBe('get /users/:userId');
   });
@@ -1066,135 +1116,197 @@ describe('newSpanRow', () => {
   });
 
   it('should not overwrite client name with empty', () => {
-    const spanRow = newSpanRow([clientSpan, clean({
-      traceId: '1',
-      id: '3',
-      timestamp: 1472470996238000,
-      kind: 'SERVER',
-      localEndpoint: backend,
-      shared: true,
-    })], false);
+    const spanRow = newSpanRow(
+      [
+        clientSpan,
+        clean({
+          traceId: '1',
+          id: '3',
+          timestamp: 1472470996238000,
+          kind: 'SERVER',
+          localEndpoint: backend,
+          shared: true,
+        }),
+      ],
+      false,
+    );
 
     expect(spanRow.spanName).toBe(clientSpan.name);
   });
 
   it('should dedupe annotations with same timestamp and value', () => {
-    const spanRow = newSpanRow([
-      clean({
-        traceId: '1',
-        parentId: '2',
-        id: '3',
-        kind: 'CLIENT',
-        localEndpoint: frontend,
-        annotations: [{ timestamp: 1, value: 'hit' }],
-      }),
-      clean({
-        traceId: '1',
-        parentId: '2',
-        id: '3',
-        kind: 'CLIENT',
-        localEndpoint: frontend,
-        annotations: [{ timestamp: 1, value: 'hit' }],
-      }),
-    ], false);
+    const spanRow = newSpanRow(
+      [
+        clean({
+          traceId: '1',
+          parentId: '2',
+          id: '3',
+          kind: 'CLIENT',
+          localEndpoint: frontend,
+          annotations: [{ timestamp: 1, value: 'hit' }],
+        }),
+        clean({
+          traceId: '1',
+          parentId: '2',
+          id: '3',
+          kind: 'CLIENT',
+          localEndpoint: frontend,
+          annotations: [{ timestamp: 1, value: 'hit' }],
+        }),
+      ],
+      false,
+    );
 
     expect(spanRow.annotations).toEqual([
       {
-        timestamp: 1, value: 'hit', endpoint: '127.0.0.1:8080 (frontend)', isDerived: false,
+        timestamp: 1,
+        value: 'hit',
+        endpoint: '127.0.0.1:8080 (frontend)',
+        isDerived: false,
       },
     ]);
   });
 
   it('should merge endpoints on shared tag', () => {
-    const spanRow = newSpanRow([
-      clean({
-        traceId: '1',
-        parentId: '2',
-        id: '3',
-        kind: 'CLIENT',
-        localEndpoint: frontend,
-        tags: { 'http.path': '/foo' },
-      }),
-      clean({
-        traceId: '1',
-        parentId: '2',
-        id: '3',
-        shared: true,
-        kind: 'SERVER',
-        localEndpoint: backend,
-        tags: { 'http.path': '/foo' },
-      }),
-    ], false);
+    const spanRow = newSpanRow(
+      [
+        clean({
+          traceId: '1',
+          parentId: '2',
+          id: '3',
+          kind: 'CLIENT',
+          localEndpoint: frontend,
+          tags: { 'http.path': '/foo' },
+        }),
+        clean({
+          traceId: '1',
+          parentId: '2',
+          id: '3',
+          shared: true,
+          kind: 'SERVER',
+          localEndpoint: backend,
+          tags: { 'http.path': '/foo' },
+        }),
+      ],
+      false,
+    );
 
     expect(spanRow.tags).toEqual([
       {
         key: 'http.path',
         value: '/foo',
-        endpoints: ['127.0.0.1:8080 (frontend)', '192.168.99.101:9000 (backend)'],
+        endpoints: [
+          '127.0.0.1:8080 (frontend)',
+          '192.168.99.101:9000 (backend)',
+        ],
       },
     ]);
   });
 
   it('should show difference in tag values per endpoint', () => {
-    const spanRow = newSpanRow([
-      clean({
-        traceId: '1',
-        parentId: '2',
-        id: '3',
-        kind: 'CLIENT',
-        localEndpoint: frontend,
-        tags: { 'http.path': '/foo' },
-      }),
-      clean({
-        traceId: '1',
-        parentId: '2',
-        id: '3',
-        shared: true,
-        kind: 'SERVER',
-        localEndpoint: backend,
-        tags: { 'http.path': '/foo/redirected' },
-      }),
-    ], false);
+    const spanRow = newSpanRow(
+      [
+        clean({
+          traceId: '1',
+          parentId: '2',
+          id: '3',
+          kind: 'CLIENT',
+          localEndpoint: frontend,
+          tags: { 'http.path': '/foo' },
+        }),
+        clean({
+          traceId: '1',
+          parentId: '2',
+          id: '3',
+          shared: true,
+          kind: 'SERVER',
+          localEndpoint: backend,
+          tags: { 'http.path': '/foo/redirected' },
+        }),
+      ],
+      false,
+    );
 
     expect(spanRow.tags).toEqual([
-      { key: 'http.path', value: '/foo', endpoints: ['127.0.0.1:8080 (frontend)'] },
-      { key: 'http.path', value: '/foo/redirected', endpoints: ['192.168.99.101:9000 (backend)'] },
+      {
+        key: 'http.path',
+        value: '/foo',
+        endpoints: ['127.0.0.1:8080 (frontend)'],
+      },
+      {
+        key: 'http.path',
+        value: '/foo/redirected',
+        endpoints: ['192.168.99.101:9000 (backend)'],
+      },
     ]);
+  });
+
+  // This prevents white screens due to failed required property tests downstream
+  it('should backfill data in malformed trace', () => {
+    malformedTrace.concat(envoyTrace).forEach((span) => {
+      const spanRow = newSpanRow([clean(span)], false);
+      expect(spanRow.duration).toBeDefined();
+      expect(spanRow.serviceName).toBeDefined();
+      expect(spanRow.spanName).toBeDefined();
+      spanRow.annotations.forEach((a) => {
+        expect(a.endpoint).toBeDefined();
+      });
+    });
   });
 });
 
 describe('formatEndpoint', () => {
   it('should format ip and port', () => {
-    expect(formatEndpoint({ ipv4: '150.151.152.153', port: 5000 })).toBe('150.151.152.153:5000');
+    expect(formatEndpoint({ ipv4: '150.151.152.153', port: 5000 })).toBe(
+      '150.151.152.153:5000',
+    );
   });
 
   it('should not use port when missing or zero', () => {
     expect(formatEndpoint({ ipv4: '150.151.152.153' })).toBe('150.151.152.153');
-    expect(formatEndpoint({ ipv4: '150.151.152.153', port: 0 })).toBe('150.151.152.153');
+    expect(formatEndpoint({ ipv4: '150.151.152.153', port: 0 })).toBe(
+      '150.151.152.153',
+    );
   });
 
   it('should put service name in parenthesis', () => {
-    expect(formatEndpoint({
-      ipv4: '150.151.152.153', port: 9042, serviceName: 'cassandra',
-    })).toBe('150.151.152.153:9042 (cassandra)');
-    expect(formatEndpoint({
-      ipv4: '150.151.152.153', serviceName: 'cassandra',
-    })).toBe('150.151.152.153 (cassandra)');
+    expect(
+      formatEndpoint({
+        ipv4: '150.151.152.153',
+        port: 9042,
+        serviceName: 'cassandra',
+      }),
+    ).toBe('150.151.152.153:9042 (cassandra)');
+    expect(
+      formatEndpoint({
+        ipv4: '150.151.152.153',
+        serviceName: 'cassandra',
+      }),
+    ).toBe('150.151.152.153 (cassandra)');
   });
 
   it('should not show empty service name', () => {
-    expect(formatEndpoint({
-      ipv4: '150.151.152.153', port: 9042, serviceName: '',
-    })).toBe('150.151.152.153:9042');
-    expect(formatEndpoint({
-      ipv4: '150.151.152.153', serviceName: '',
-    })).toBe('150.151.152.153');
+    expect(
+      formatEndpoint({
+        ipv4: '150.151.152.153',
+        port: 9042,
+        serviceName: '',
+      }),
+    ).toBe('150.151.152.153:9042');
+    expect(
+      formatEndpoint({
+        ipv4: '150.151.152.153',
+        serviceName: '',
+      }),
+    ).toBe('150.151.152.153');
   });
 
   it('should show service name missing IP', () => {
-    expect(formatEndpoint({
-      serviceName: 'rabbit',
-    })).toBe('rabbit');
+    expect(
+      formatEndpoint({
+        serviceName: 'rabbit',
+      }),
+    ).toBe('rabbit');
   });
 
   it('should not crash on no data', () => {
@@ -1202,16 +1314,25 @@ describe('formatEndpoint', () => {
   });
 
   it('should put ipv6 in brackets', () => {
-    expect(formatEndpoint({
-      ipv6: '2001:db8::c001', port: 9042, serviceName: 'cassandra',
-    })).toBe('[2001:db8::c001]:9042 (cassandra)');
+    expect(
+      formatEndpoint({
+        ipv6: '2001:db8::c001',
+        port: 9042,
+        serviceName: 'cassandra',
+      }),
+    ).toBe('[2001:db8::c001]:9042 (cassandra)');
 
-    expect(formatEndpoint({
-      ipv6: '2001:db8::c001', port: 9042,
-    })).toBe('[2001:db8::c001]:9042');
+    expect(
+      formatEndpoint({
+        ipv6: '2001:db8::c001',
+        port: 9042,
+      }),
+    ).toBe('[2001:db8::c001]:9042');
 
-    expect(formatEndpoint({
-      ipv6: '2001:db8::c001',
-    })).toBe('[2001:db8::c001]');
+    expect(
+      formatEndpoint({
+        ipv6: '2001:db8::c001',
+      }),
+    ).toBe('[2001:db8::c001]');
   });
 });
